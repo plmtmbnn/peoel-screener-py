@@ -34,6 +34,7 @@ uploads/
 *.tmp
 *.csv
 *.json
+!vercel.json
 
 # IDE
 .vscode/

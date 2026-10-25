@@ -26,7 +26,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("peoel.screener.api")
 
-TEMP_BASE_DIR = Path("temp_residuals")
+TEMP_BASE_DIR = Path(os.environ.get("TEMP_RESIDUALS_DIR") or Path(tempfile.gettempdir()) / "peoel_residuals")
 
 
 @asynccontextmanager
@@ -36,14 +36,22 @@ async def lifespan(app: FastAPI):
     - Menyiapkan direktori temp untuk residual file
     - Membersihkan file residual basi (> 1 jam) saat startup dan shutdown
     """
-    TEMP_BASE_DIR.mkdir(parents=True, exist_ok=True)
-    cleaned = clean_stale_files(TEMP_BASE_DIR, max_age_seconds=3600)
-    if cleaned:
-        logger.info(f"Startup: {cleaned} file residual lama dibersihkan.")
+    try:
+        TEMP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+        cleaned = clean_stale_files(TEMP_BASE_DIR, max_age_seconds=3600)
+        if cleaned:
+            logger.info(f"Startup: {cleaned} file residual lama dibersihkan.")
+    except Exception as e:
+        logger.warning(f"Startup: gagal inisialisasi temp dir {TEMP_BASE_DIR}: {e}")
     yield
     # Shutdown cleanup
-    clean_stale_files(TEMP_BASE_DIR, max_age_seconds=0)
-    logger.info("Shutdown: pembersihan residual selesai.")
+    try:
+        if TEMP_BASE_DIR.exists():
+            clean_stale_files(TEMP_BASE_DIR, max_age_seconds=0)
+            logger.info("Shutdown: pembersihan residual selesai.")
+    except Exception as e:
+        logger.warning(f"Shutdown: gagal pembersihan residual: {e}")
+
 
 
 app = FastAPI(

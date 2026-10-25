@@ -82,3 +82,23 @@ def test_analyze_endpoint():
     assert "levels" in payload
     assert "setups" in payload
     assert len(payload["setups"]) == 8
+
+
+def test_scan_zip_endpoint():
+    import io
+    import zipfile
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("running-trade_TEST.csv", SAMPLE_TRADES_CSV)
+        zf.writestr("trade-book_TEST.json", SAMPLE_ORDER_TRADE_JSON)
+    zip_buf.seek(0)
+
+    files = {"zip_file": ("watchlist.zip", zip_buf.getvalue(), "application/zip")}
+    res = client.post("/api/v1/scan-zip", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_scanned"] == 1
+    assert len(data["leaderboard"]) == 1
+    assert data["leaderboard"][0]["ticker"] == "TEST"
+
