@@ -102,3 +102,22 @@ def test_scan_zip_endpoint():
     assert len(data["leaderboard"]) == 1
     assert data["leaderboard"][0]["ticker"] == "TEST"
 
+
+def test_vercel_asgi_wrapper():
+    from api.index import app as vercel_app
+
+    c = TestClient(vercel_app)
+    # Test path unwrapping when Vercel rewrites to entrypoint
+    res_health = c.get("/api/index.py", headers={"x-matched-path": "/health"})
+    assert res_health.status_code == 200
+    assert res_health.json()["status"] == "ok"
+
+    res_root = c.get("/api/index.py", headers={"x-matched-path": "/"})
+    assert res_root.status_code == 200
+    assert res_root.json()["status"] == "online"
+
+    res_archetypes = c.get("/api/index.py", headers={"x-matched-path": "/api/v1/archetypes"})
+    assert res_archetypes.status_code == 200
+    assert res_archetypes.json()["count"] >= 9
+
+
