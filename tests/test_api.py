@@ -109,4 +109,41 @@ def test_pair_key_timestamp_tolerance():
     assert pair_key("running-trade_DOOH_20261026-2218.csv") == pair_key("trade-book_DOOH_20261026-2217.json")
 
 
+def test_stock_summary_endpoint():
+    from unittest.mock import patch, AsyncMock
+    mock_payload = {
+        "draw": 0,
+        "recordsTotal": 1,
+        "recordsFiltered": 1,
+        "data": [{"StockCode": "AADI", "Previous": 11375.0, "Close": 11500.0}],
+    }
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.json = lambda: mock_payload
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        res = client.get("/api/v1/stock-summary")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["recordsTotal"] == 1
+        assert data["data"][0]["StockCode"] == "AADI"
+
+        res_alias = client.get("/api/v1/idx/stock-summary?length=10&start=0&date=2026-10-23")
+        assert res_alias.status_code == 200
+
+
+def test_stock_summary_upstream_error():
+    from unittest.mock import patch, AsyncMock
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 500
+        mock_resp.text = "Internal Server Error"
+        mock_get.return_value = mock_resp
+
+        res = client.get("/api/v1/stock-summary")
+        assert res.status_code == 502
+
+
+
 

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -269,3 +270,51 @@ async def list_setups():
             {"id": 8, "name": "Range-Bound Squeeze Absorption", "category": "RANGE SCALPING", "desc": "Peluang transaksi bolak-balik pada saham rentang sempit dengan entri di batas demand support."}
         ]
     }
+
+
+IDX_STOCK_SUMMARY_URL = "https://www.idx.co.id/primary/TradingSummary/GetStockSummary"
+IDX_HEADERS = {
+    "Referer": "https://www.idx.co.id/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+}
+
+
+@app.get("/api/v1/stock-summary", tags=["IDX Data"])
+@app.get("/api/v1/idx/stock-summary", tags=["IDX Data"])
+async def get_idx_stock_summary(
+    length: int = Query(9999, ge=1, description="Jumlah data yang diambil"),
+    start: int = Query(0, ge=0, description="Offset data yang diambil"),
+    date: Optional[str] = Query(None, description="Tanggal ringkasan perdagangan (opsional, format YYYYMMDD atau YYYY-MM-DD)"),
+):
+    """
+    Mengambil data ringkasan perdagangan saham terkini langsung dari IDX primary API.
+    Endpoint upstream: https://www.idx.co.id/primary/TradingSummary/GetStockSummary
+    """
+    params = {"length": length, "start": start}
+    if date:
+        params["date"] = date.replace("-", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(IDX_STOCK_SUMMARY_URL, headers=IDX_HEADERS, params=params)
+            if resp.status_code != 200:
+                logger.error(f"IDX API error status={resp.status_code}: {resp.text[:200]}")
+                raise HTTPException(
+                    status_code=resp.status_code if resp.status_code < 500 else 502,
+                    detail=f"Server IDX mengembalikan status {resp.status_code}",
+                )
+            return resp.json()
+    except httpx.HTTPError as err:
+        logger.exception(f"Gagal menghubungi IDX API: {err}")
+        raise HTTPException(status_code=502, detail=f"Gagal menghubungi upstream IDX API: {str(err)}")
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.exception(f"Unexpected error saat fetching IDX stock summary: {err}")
+        raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(err)}")
+

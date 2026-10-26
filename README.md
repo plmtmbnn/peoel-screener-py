@@ -250,9 +250,18 @@ Mengunggah satu file arsip `.zip` berisi kumpulan file CSV dan JSON untuk seluru
 }
 ```
 
-### 4. Referensi Arketipe & Setup
+### 4. Ringkasan Perdagangan Saham IDX (Live Data)
+* **`GET /api/v1/stock-summary`** (alias: `GET /api/v1/idx/stock-summary`):
+  Mengambil data seluruh ringkasan saham langsung dari upstream IDX (`https://www.idx.co.id/primary/TradingSummary/GetStockSummary?length=9999&start=0`).
+  * Query parameters:
+    * `length` (default: `9999`): Jumlah record yang diambil.
+    * `start` (default: `0`): Offset data awal.
+    * `date` (opsional): Format `YYYYMMDD` atau `YYYY-MM-DD`.
+
+### 5. Referensi Arketipe & Setup
 * **`GET /api/v1/archetypes`**: Daftar 10 arketipe mikrostruktur BEI.
 * **`GET /api/v1/setups`**: Daftar 8 setup playbook intraday beserta kategori dan deskripsinya.
+
 
 ---
 
