@@ -23,16 +23,25 @@ All AI coding assistants (Antigravity, Claude Code, Cursor, Codex, Gemini) must 
    - Continuous session is strictly 09:00:00 to 15:50:00 WIB. Auction trades (pre-opening and closing) must be isolated.
    - Guard against extended entries (>2 ticks above ideal entry zone triggers `🟡 SETUP VALID TAPI EXTENDED - TUNGGU PULLBACK`).
    - Maintain client contract stability for `app.screener.analyze_stock` output dictionary.
-4. **Ponytail Lazy Senior Developer Standard**:
+4. **Upstream Live IDX Data & Cloudflare Proxy Routing**:
+   - `GET /api/v1/stock-summary` (alias `GET /api/v1/idx/stock-summary`) queries `https://www.idx.co.id/primary/TradingSummary/GetStockSummary`.
+   - Cloudflare on `idx.co.id` challenges cloud datacenter IP ranges (AWS Lambda, Vercel) with 403 Forbidden. Outbound requests must support residential proxy routing via `IDX_PROXY_URL` (or `HTTPS_PROXY` / `IDX_PROXY`) with `httpx[socks]` for both HTTP and SOCKS5.
+   - If blocked by Cloudflare (403), return an actionable 502 Bad Gateway response directing operators to configure `IDX_PROXY_URL`.
+5. **Trap Detection & Batch Pairing Resilience**:
+   - Morning ORB Bull Trap (`orb_bull_trap`): Flag false breakouts where early buying pierces ORB High then collapses below ORB Low.
+   - Broken Bid Wall Tracking (`broken_walls`): Quantify breached passive bid walls to detect forced liquidations.
+   - Bid Collapsed at Low (`bid_collapsed_low`): Identify when session low flips to offer queue, confirming broken support.
+   - ZIP Pair Key Timestamp Tolerance: `pair_key` in `app/screener.py` must tolerate download timestamp minute/second differences when pairing running trade CSV with trade-book JSON.
+6. **Ponytail Lazy Senior Developer Standard**:
    - Shortest working diff wins.
    - Inspect blast radius before writing code: callers, tests, fixtures, config.
    - End every response with 1 to 2 lines on what was skipped or not checked, and any risk.
-5. **Antislop Comment & Copywriting Hygiene**:
+7. **Antislop Comment & Copywriting Hygiene**:
    - Code comments: no decorative banner separators (`# ===`), no workflow step narration (`# Step 1:`), no restating the obvious. Keep comments short and explain non-obvious *why*.
    - Copywriting: zero em dashes (`—`) in text or comments. Use commas, colons, hyphens, or parentheses instead.
-6. **Strict Git Commit & Push Policy**:
+8. **Strict Git Commit & Push Policy**:
    - NEVER stage, commit, or push changes unless explicitly requested by the user for each occurrence.
-7. **Mandatory Test Verification**:
+9. **Mandatory Test Verification**:
    - Always run and verify all tests before completing any task:
      ```powershell
      .\.venv\Scripts\pytest

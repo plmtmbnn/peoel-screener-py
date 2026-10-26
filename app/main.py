@@ -301,6 +301,9 @@ async def get_idx_stock_summary(
         params["date"] = date.replace("-", "")
 
     proxy_url = os.environ.get("IDX_PROXY_URL") or os.environ.get("IDX_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy_url:
+        proxy_url = proxy_url.strip(" \t\r\n\"'")
+
     client_kwargs: Dict[str, Any] = {
         "timeout": 20.0,
         "follow_redirects": True,
@@ -327,6 +330,15 @@ async def get_idx_stock_summary(
                     detail=f"Server IDX mengembalikan status {resp.status_code}",
                 )
             return resp.json()
+    except httpx.ProxyError as err:
+        logger.exception(f"Koneksi/autentikasi proxy gagal: {err}")
+        detail_msg = f"Koneksi proxy gagal: {str(err)}"
+        if "407" in str(err):
+            detail_msg = (
+                "Proxy mengembalikan 407 Proxy Authentication Required. "
+                "Pastikan format IDX_PROXY_URL menggunakan Proxy Username & Password dari menu Proxy List/Settings di dashboard Webshare (bukan email/password login akun Webshare)."
+            )
+        raise HTTPException(status_code=502, detail=detail_msg)
     except httpx.HTTPError as err:
         logger.exception(f"Gagal menghubungi IDX API: {err}")
         raise HTTPException(status_code=502, detail=f"Gagal menghubungi upstream IDX API: {str(err)}")

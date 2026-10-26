@@ -24,7 +24,16 @@ This document provides foundational context, architectural boundaries, and opera
 > - **Extended Tick Guard (> 2 Ticks)**: If market price trades more than 2 ticks above the ideal entry zone, status must flag `🟡 SETUP VALID TAPI EXTENDED - TUNGGU PULLBACK` to prevent FOMO entries.
 > - **Adaptive Block Lot Calculation**: Block size thresholds must be computed dynamically based on ~Rp 1 Billion nominal value or >= 1% continuous volume, with fixed 50,000 lot mode available only as an explicit option.
 > - **10 BEI Archetypes & 8 Playbook Setups**: Preserve classification integrity for all 10 archetypes and 8 intraday setups.
+> - **Trap Detection & Broken Support Verification**: Integrate morning ORB bull trap (`orb_bull_trap`), passive bid wall fractures (`broken_walls`), and low-level bid collapse (`bid_collapsed_low`) into safety actions and JSON schemas.
+> - **ZIP Pair Key Timestamp Tolerance**: Maintain minute/second download drift tolerance in `pair_key` to avoid unlinked running trade CSV and trade-book JSON pairs.
 > - **Client Contract Immutability**: Maintain backward compatibility for the output dictionary structure returned by `app.screener.analyze_stock` to avoid breaking frontend clients.
+
+> [!IMPORTANT]
+> **Upstream Live IDX API & Cloudflare Proxy Routing Mandate**:
+> Handling external market summaries from the official exchange requires managing serverless network constraints:
+> - **Cloudflare Datacenter Interception Guard**: Cloudflare on `idx.co.id` challenges cloud/datacenter IP ranges (AWS Lambda, Vercel) with 403 Forbidden. Outbound calls to `https://www.idx.co.id/primary/TradingSummary/GetStockSummary` must support residential proxy routing via `IDX_PROXY_URL` (or `HTTPS_PROXY` / `IDX_PROXY`).
+> - **HTTP & SOCKS5 Support**: Proxy routing must support both HTTP/HTTPS and SOCKS5 schemes via `httpx[socks]`.
+> - **Actionable 502 Guidance**: If blocked with 403, the endpoint must return a descriptive 502 Bad Gateway response directing operators to configure `IDX_PROXY_URL` rather than propagating opaque upstream errors.
 
 > [!IMPORTANT]
 > **Mandatory Ponytail Lazy Senior Developer Standard**:
@@ -63,7 +72,7 @@ This document provides foundational context, architectural boundaries, and opera
 - **ASGI Server**: Uvicorn standard (>=0.32.0)
 - **Language & Runtime**: Python 3.12+ / Python 3.15
 - **Schema & Validation**: Pydantic v2 (>=2.9.0)
-- **HTTP Client**: HTTPX (>=0.27.0)
+- **HTTP Client**: HTTPX with SOCKS support (httpx[socks] >= 0.27.0)
 - **Testing Framework**: Pytest (>=8.0.0) with FastAPI `TestClient`
 - **Standard Library Modules**: `math`, `collections`, `bisect`, `csv`, `json`, `io`, `pathlib`, `tempfile`, `shutil`
 

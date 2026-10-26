@@ -175,6 +175,18 @@ def test_stock_summary_proxy_env():
             assert kwargs.get("proxy") == "http://1.2.3.4:8080"
 
 
+def test_stock_summary_proxy_407_error():
+    from unittest.mock import patch, AsyncMock
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        import httpx
+        mock_get.side_effect = httpx.ProxyError("407 Proxy Authentication Required")
+
+        res = client.get("/api/v1/stock-summary")
+        assert res.status_code == 502
+        assert "407 Proxy Authentication Required" in res.json()["detail"]
+
+
+
 
 
 
