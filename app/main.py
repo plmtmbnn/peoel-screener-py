@@ -293,15 +293,33 @@ async def get_idx_stock_summary(
 ):
     """
     Mengambil data ringkasan perdagangan saham terkini langsung dari IDX primary API.
+    Mendukung environment variable IDX_PROXY_URL / HTTPS_PROXY untuk routing melalui proxy jika dihosting di datacenter/cloud.
     Endpoint upstream: https://www.idx.co.id/primary/TradingSummary/GetStockSummary
     """
     params = {"length": length, "start": start}
     if date:
         params["date"] = date.replace("-", "")
 
+    proxy_url = os.environ.get("IDX_PROXY_URL") or os.environ.get("IDX_PROXY") or os.environ.get("HTTPS_PROXY")
+    client_kwargs: Dict[str, Any] = {
+        "timeout": 20.0,
+        "follow_redirects": True,
+    }
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(**client_kwargs) as client:
             resp = await client.get(IDX_STOCK_SUMMARY_URL, headers=IDX_HEADERS, params=params)
+            if resp.status_code == 403:
+                logger.error("IDX upstream memblokir request (Cloudflare Bot Challenge 403).")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Server IDX memblokir request cloud datacenter (Cloudflare 403). "
+                        "Silakan set environment variable IDX_PROXY_URL di dashboard Vercel dengan residential/Indonesian proxy."
+                    ),
+                )
             if resp.status_code != 200:
                 logger.error(f"IDX API error status={resp.status_code}: {resp.text[:200]}")
                 raise HTTPException(
@@ -317,4 +335,5 @@ async def get_idx_stock_summary(
     except Exception as err:
         logger.exception(f"Unexpected error saat fetching IDX stock summary: {err}")
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(err)}")
+
 

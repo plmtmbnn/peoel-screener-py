@@ -257,6 +257,10 @@ Mengunggah satu file arsip `.zip` berisi kumpulan file CSV dan JSON untuk seluru
     * `length` (default: `9999`): Jumlah record yang diambil.
     * `start` (default: `0`): Offset data awal.
     * `date` (opsional): Format `YYYYMMDD` atau `YYYY-MM-DD`.
+  * Konfigurasi Proxy (Vercel / Cloud Datacenter):
+    * Cloudflare pada `idx.co.id` memblokir IP serverless/datacenter (AWS/Vercel) dengan challenge 403.
+    * Set environment variable `IDX_PROXY_URL` (format: `http://user:pass@host:port` atau `socks5://host:port`) di dashboard Vercel agar request diarahkan melalui IP residential atau server Indonesia.
+
 
 ### 5. Referensi Arketipe & Setup
 * **`GET /api/v1/archetypes`**: Daftar 10 arketipe mikrostruktur BEI.

@@ -145,5 +145,36 @@ def test_stock_summary_upstream_error():
         assert res.status_code == 502
 
 
+def test_stock_summary_cloudflare_403():
+    from unittest.mock import patch, AsyncMock
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 403
+        mock_resp.text = "Just a moment..."
+        mock_get.return_value = mock_resp
+
+        res = client.get("/api/v1/stock-summary")
+        assert res.status_code == 502
+        assert "Cloudflare 403" in res.json()["detail"]
+
+
+def test_stock_summary_proxy_env():
+    from unittest.mock import patch, AsyncMock, MagicMock
+    with patch.dict(os.environ, {"IDX_PROXY_URL": "http://1.2.3.4:8080"}):
+        with patch("httpx.AsyncClient", autospec=True) as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"draw": 0, "recordsTotal": 0, "data": []}
+            mock_client.get.return_value = mock_resp
+
+            res = client.get("/api/v1/stock-summary")
+            assert res.status_code == 200
+            _, kwargs = mock_client_cls.call_args
+            assert kwargs.get("proxy") == "http://1.2.3.4:8080"
+
+
+
 
 
