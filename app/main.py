@@ -126,13 +126,13 @@ async def analyze_single_ticker(
         trades_list = list(csv_reader)
 
         if not trades_list:
-            raise HTTPException(status_code=400, detail="Data baris pada CSV Running Trade tidak ditemukan.")
+            raise HTTPException(status_code=400, detail="Baris data pada CSV Running Trade tidak ditemukan.")
 
         # Parse JSON
         try:
             book_dict = json.loads(book_raw_bytes.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as je:
-            raise HTTPException(status_code=400, detail=f"File JSON tidak valid: {str(je)}")
+            raise HTTPException(status_code=400, detail=f"Format file JSON tidak valid: {str(je)}")
 
         # 3. Konfigurasi override jika dikirimkan oleh FE
         cfg_override = {}
@@ -227,25 +227,25 @@ async def scan_batch_zip(
         }
 
     except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="File upload bukan file ZIP yang valid.")
+        raise HTTPException(status_code=400, detail="File yang diunggah bukan arsip ZIP yang valid.")
     except Exception as e:
         logger.exception(f"Gagal memproses batch zip: {e}")
-        raise HTTPException(status_code=500, detail=f"Gagal memproses file batch: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal memproses arsip batch: {str(e)}")
 
 
 @app.get("/api/v1/archetypes", tags=["Referensi"])
 async def list_archetypes():
     """Daftar Arketipe Mikrostruktur Bursa Efek Indonesia."""
     archetypes = [
-        {"name": "Growth Markup (VKTR / BUVA)", "type": "Bullish Trend", "desc": "Markup bertahap dengan akumulasi konsisten dan support dinamis."},
-        {"name": "Low-Float ARA Lock (ASLI)", "type": "Momentum Shakeout", "desc": "Shakeout awal disusul twin sweep agresif melompat ke batas ARA."},
-        {"name": "Lightning Rocket & Churn (FORU)", "type": "Volatility Churn", "desc": "Lonjakan vertikal cepat di pagi hari disusul distribusi di pucuk."},
-        {"name": "Staircase Precision (MBMA / KETR)", "type": "Stepwise Trend", "desc": "Pola tangga naik presisi dengan higher close antar-interval dan volume stabil."},
-        {"name": "Nimble Skirmish (OASA)", "type": "Agile Scalp", "desc": "Kenaikan terukur saham lapis dua dengan zero-ask low terkonfirmasi dan rebound bersih."},
-        {"name": "Whale Bazooka War (BRMS)", "type": "Institutional Battle", "desc": "Pertarungan tembakan bazooka institusi (≥ Rp 1B) disusul pantulan V-Shape."},
-        {"name": "Range-Bound Squeeze (PTRO / DOOH)", "type": "Liquidity Coil", "desc": "Kompresi rentang ketat (< 5%) dengan penyerapan 50%+ volume di sekitar VPOC."},
-        {"name": "Distribution Blue Chip (AMRT / SMIL)", "type": "Stealth Distribution", "desc": "Pelemahan bertahap dengan TWAP slicing sell tersembunyi di balik order antrean."},
-        {"name": "Speculative Collapse (STRK)", "type": "Panic Waterfall", "desc": "Penarikan bid mendadak disusul guyuran HAKI vertikal menuju dasar harga."}
+        {"name": "Growth Markup (VKTR / BUVA)", "type": "Bullish Trend", "desc": "Markup harga bertahap didukung akumulasi konsisten dan support dinamis."},
+        {"name": "Low-Float ARA Lock (ASLI)", "type": "Momentum Shakeout", "desc": "Shakeout awal disusul twin sweep agresif menuju batas Auto Rejection Atas (ARA)."},
+        {"name": "Lightning Rocket & Churn (FORU)", "type": "Volatility Churn", "desc": "Lonjakan harga cepat di awal sesi disusul rotasi volume tinggi di resistance."},
+        {"name": "Staircase Precision (MBMA / KETR)", "type": "Stepwise Trend", "desc": "Tren naik teratur dengan pembentukan higher close antar-interval dan volume stabil."},
+        {"name": "Nimble Skirmish (OASA)", "type": "Agile Scalp", "desc": "Kenaikan terukur saham lapis dua dengan konfirmasi zero-ask low dan pantulan bersih."},
+        {"name": "Whale Bazooka War (BRMS)", "type": "Institutional Battle", "desc": "Transaksi blok besar institusi (≥ Rp 1 Miliar) dengan penyerapan likuiditas dan pantulan V-Shape."},
+        {"name": "Range-Bound Squeeze (PTRO / DOOH)", "type": "Liquidity Coil", "desc": "Kompresi rentang sempit (< 5%) dengan konsentrasi penyerapan volume (≥ 50%) di sekitar VPOC."},
+        {"name": "Distribution Blue Chip (AMRT / SMIL)", "type": "Stealth Distribution", "desc": "Distribusi bertahap menggunakan TWAP slicing sell di balik antrean order."},
+        {"name": "Speculative Collapse (STRK)", "type": "Panic Waterfall", "desc": "Penarikan bid mendadak disusul tekanan jual agresif tanpa penyerapan likuiditas pembeli."}
     ]
     return {
         "count": len(archetypes),
@@ -259,13 +259,13 @@ async def list_setups():
     return {
         "count": 8,
         "setups": [
-            {"id": 1, "name": "Zero-Ask Low Reversal", "category": "BULLISH REVERSAL", "desc": "Level low 100% HAKI (0% buy) yang bertahan dan memantul minimal 2 tick."},
-            {"id": 2, "name": "Twin-Sweep Breakout", "category": "MOMENTUM AGGRESSIVE", "desc": "Dua parent buy agresif ≥ batas blok yang dieksekusi berurutan dalam rentang singkat."},
-            {"id": 3, "name": "VPOC Re-test Absorption", "category": "TREND FOLLOWING", "desc": "Harga kembali menguji area volume terbesar sesi dan diserap oleh antrean bid besar."},
-            {"id": 4, "name": "Staircase Momentum Continuation", "category": "TREND CONTINUATION", "desc": "Tren naik bertahap dengan pembentukan pijakan harga baru di atas VWAP."},
-            {"id": 5, "name": "Selling Climax Exhaustion Reversal", "category": "CONTRARIAN V-SHAPE", "desc": "Lonjakan volume jual ekstrem yang gagal menekan harga lebih dalam lalu memantul tajam."},
-            {"id": 6, "name": "Level Psikologis Breakout", "category": "ROUND NUMBER BREAKOUT", "desc": "Penembusan bersih level angka bulat yang didukung penyerapan likuiditas tinggi."},
-            {"id": 7, "name": "Bearish Waterfall / Dump Collapse", "category": "AVOID / IMMEDIATE CUT LOSS", "desc": "Kejatuhan harga tanpa pantulan akibat dominasi HAKI masif dan pembeli absen."},
-            {"id": 8, "name": "Range-Bound Squeeze Absorption", "category": "RANGE SCALPING", "desc": "Strategi ping-pong pada saham terkompresi dengan beli di batas demand support."}
+            {"id": 1, "name": "Zero-Ask Low Reversal", "category": "BULLISH REVERSAL", "desc": "Level harga terendah didominasi 100% HAKI (zero-ask) yang bertahan sebagai support dan memantul minimal 2 tick."},
+            {"id": 2, "name": "Twin-Sweep Breakout", "category": "MOMENTUM AGGRESSIVE", "desc": "Dua order beli agresif (≥ batas blok) yang dieksekusi berurutan dalam rentang waktu singkat."},
+            {"id": 3, "name": "VPOC Re-test Absorption", "category": "TREND FOLLOWING", "desc": "Pengujian kembali area Volume Point of Control (VPOC) sesi dengan penyerapan antrean bid tebal."},
+            {"id": 4, "name": "Staircase Momentum Continuation", "category": "TREND CONTINUATION", "desc": "Tren naik bertahap dengan pembentukan higher close baru di atas level VWAP."},
+            {"id": 5, "name": "Selling Climax Exhaustion Reversal", "category": "CONTRARIAN V-SHAPE", "desc": "Klimaks volume jual ekstrem yang gagal menekan harga lebih dalam, disusul pantulan tajam V-Shape."},
+            {"id": 6, "name": "Level Psikologis Breakout", "category": "ROUND NUMBER BREAKOUT", "desc": "Penembusan bersih level angka bulat psikologis dengan dukungan volume transaksi signifikan."},
+            {"id": 7, "name": "Bearish Waterfall / Dump Collapse", "category": "AVOID / IMMEDIATE CUT LOSS", "desc": "Penurunan harga tajam tanpa pantulan akibat dominasi penjualan agresif dan ketiadaan pembeli."},
+            {"id": 8, "name": "Range-Bound Squeeze Absorption", "category": "RANGE SCALPING", "desc": "Peluang transaksi bolak-balik pada saham rentang sempit dengan entri di batas demand support."}
         ]
     }
