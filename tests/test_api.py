@@ -103,3 +103,10 @@ def test_scan_zip_endpoint():
     assert data["leaderboard"][0]["ticker"] == "TEST"
 
 
+def test_pair_key_timestamp_tolerance():
+    from app.screener import pair_key
+    assert pair_key("running-trade_PTRO_20261026-2220.csv") == pair_key("trade-book_PTRO_20261026-2219.json")
+    assert pair_key("running-trade_DOOH_20261026-2218.csv") == pair_key("trade-book_DOOH_20261026-2217.json")
+
+
+
