@@ -10,6 +10,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+import urllib.parse
 
 import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
@@ -284,6 +285,23 @@ IDX_HEADERS = {
 }
 
 
+def extract_scrape_do_token(raw_url: Optional[str]) -> Optional[str]:
+    """Ekstraksi token Scrape.do dari URL API, proxy URL, atau token mentah."""
+    if not raw_url:
+        return None
+    val = raw_url.strip(" \t\r\n\"'")
+    if "scrape.do" in val:
+        parsed = urllib.parse.urlparse(val)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "token" in qs:
+            return qs["token"][0]
+        if parsed.username:
+            return parsed.username
+    if len(val) >= 30 and not val.startswith(("http://", "https://", "socks5://")):
+        return val
+    return None
+
+
 @app.get("/api/v1/stock-summary", tags=["IDX Data"])
 @app.get("/api/v1/idx/stock-summary", tags=["IDX Data"])
 async def get_idx_stock_summary(
@@ -293,7 +311,8 @@ async def get_idx_stock_summary(
 ):
     """
     Mengambil data ringkasan perdagangan saham terkini langsung dari IDX primary API.
-    Mendukung environment variable IDX_PROXY_URL / HTTPS_PROXY untuk routing melalui proxy jika dihosting di datacenter/cloud.
+    Mendukung Scrape.do (otomatis bypass Cloudflare) via SCRAPEDO_TOKEN atau IDX_PROXY_URL,
+    serta proxy standar via IDX_PROXY_URL / HTTPS_PROXY jika dihosting di datacenter/cloud.
     Endpoint upstream: https://www.idx.co.id/primary/TradingSummary/GetStockSummary
     """
     params = {"length": length, "start": start}
@@ -301,6 +320,32 @@ async def get_idx_stock_summary(
         params["date"] = date.replace("-", "")
 
     proxy_url = os.environ.get("IDX_PROXY_URL") or os.environ.get("IDX_PROXY") or os.environ.get("HTTPS_PROXY")
+    scrape_token = os.environ.get("SCRAPEDO_TOKEN") or extract_scrape_do_token(proxy_url)
+
+    # Jalur Scrape.do: otomatis menyelesaikan Cloudflare Bot Challenge di level upstream
+    if scrape_token:
+        target_with_params = f"{IDX_STOCK_SUMMARY_URL}?{urllib.parse.urlencode(params)}"
+        encoded_target = urllib.parse.quote(target_with_params, safe="")
+        scrape_endpoint = f"https://api.scrape.do/?token={scrape_token}&url={encoded_target}"
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.get(scrape_endpoint)
+                if resp.status_code != 200:
+                    logger.error(f"Scrape.do upstream error status={resp.status_code}: {resp.text[:200]}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Scrape.do mengembalikan status {resp.status_code}: {resp.text[:200]}",
+                    )
+                return resp.json()
+        except httpx.HTTPError as err:
+            logger.exception(f"Gagal menghubungi Scrape.do API: {err}")
+            raise HTTPException(status_code=502, detail=f"Gagal menghubungi Scrape.do API: {str(err)}")
+        except HTTPException:
+            raise
+        except Exception as err:
+            logger.exception(f"Unexpected error via Scrape.do: {err}")
+            raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(err)}")
+
     if proxy_url:
         proxy_url = proxy_url.strip(" \t\r\n\"'")
 
@@ -320,7 +365,7 @@ async def get_idx_stock_summary(
                     status_code=502,
                     detail=(
                         "Server IDX memblokir request cloud datacenter (Cloudflare 403). "
-                        "Silakan set environment variable IDX_PROXY_URL di dashboard Vercel dengan residential/Indonesian proxy."
+                        "Silakan set environment variable IDX_PROXY_URL di dashboard Vercel dengan residential proxy atau token Scrape.do."
                     ),
                 )
             if resp.status_code != 200:

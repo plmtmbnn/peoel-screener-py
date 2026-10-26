@@ -186,6 +186,27 @@ def test_stock_summary_proxy_407_error():
         assert "407 Proxy Authentication Required" in res.json()["detail"]
 
 
+def test_stock_summary_scrape_do_token():
+    from unittest.mock import patch, AsyncMock, MagicMock
+    mock_url = "https://api.scrape.do/?url=https%3A%2F%2Fhttpbin.co%2Fanything&token=test_dummy_scrape_do_token_12345"
+    with patch.dict(os.environ, {"IDX_PROXY_URL": mock_url}):
+        with patch("httpx.AsyncClient", autospec=True) as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"draw": 0, "recordsTotal": 10, "data": []}
+            mock_client.get.return_value = mock_resp
+
+            res = client.get("/api/v1/stock-summary")
+            assert res.status_code == 200
+            args, _ = mock_client.get.call_args
+            assert "api.scrape.do" in args[0]
+            assert "test_dummy_scrape_do_token_12345" in args[0]
+
+
+
+
 
 
 
