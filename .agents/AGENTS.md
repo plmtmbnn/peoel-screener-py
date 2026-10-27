@@ -23,10 +23,27 @@ This document provides foundational context, architectural boundaries, and opera
 > - **Continuous vs Auction Session Isolation (09:00:00 to 15:50:00 WIB)**: Only trades executed during the continuous session are included in VWAP, interval delta, and staircase calculations. Pre-opening and closing auction trades must remain isolated to prevent price distortion.
 > - **Extended Tick Guard (> 2 Ticks)**: If market price trades more than 2 ticks above the ideal entry zone, status must flag `🟡 SETUP VALID TAPI EXTENDED - TUNGGU PULLBACK` to prevent FOMO entries.
 > - **Adaptive Block Lot Calculation**: Block size thresholds must be computed dynamically based on ~Rp 1 Billion nominal value or >= 1% continuous volume, with fixed 50,000 lot mode available only as an explicit option.
-> - **10 BEI Archetypes & 8 Playbook Setups**: Preserve classification integrity for all 10 archetypes and 8 intraday setups.
-> - **Trap Detection & Broken Support Verification**: Integrate morning ORB bull trap (`orb_bull_trap`), passive bid wall fractures (`broken_walls`), and low-level bid collapse (`bid_collapsed_low`) into safety actions and JSON schemas.
+> - **Intraday Archetypes & Playbook Setups**: Preserve classification integrity for all 10 intraday archetypes and 8 intraday setups in `app/screener.py`.
+> - **Swing Trading Engine (Horizon 1 - 2 Weeks / 5 - 10 Trading Days)**:
+>   - Implemented in `app/swing_screener.py` and exposed via `POST /api/v1/analyze-swing`.
+>   - 5-Layer Composite Scoring Architecture (0 - 100):
+>     1. Layer 1 (Price Action & Multi-Day Volume Profile, 25%): VCP contraction, Ascending Value Area migration, 10D/20D/60D VPOC, Stage 2 markup detection, volume dry-up, and volume breakout.
+>     2. Layer 2 (Order Flow & PLIR, 25%): Reconstructed parent-order Big Money flows across 1D, 5D, 10D, 22D; anchored delta from swing low; red-day absorption; and Paint-the-Tape Bull-Trap divergence detection.
+>     3. Layer 3 (Participant Profile & Bandar Cost Basis, 20%): Conviction ratio (|net| / gross), institutional classification (`HIGH_CONVICTION_INST` >= 45% retention), and separation of Active In-Range Accumulators from Trapped Legacy Positions (>25% underwater).
+>     4. Layer 4 (Broker Trajectory & Cumulative Slopes, 20%): 1D/5D/10D/20D cumulative delta trajectory, seller exhaustion, distributor buyback, and crowd capitulation.
+>     5. Layer 5 (Network Topology & Anti-Wash, 10%): Self-matching ratio, circular wash rotation, and Many-to-Few absorption vs Few-to-Many dispersion.
+>   - Dynamic Weight Normalization: When optional files are omitted, active layer base weights automatically rebalance to 100% (e.g. 2-file mode normalizes Layer 1 and Layer 2 to 50% each).
+>   - 6 Swing Playbook Setups:
+>     1. Multi-Day Silent Absorption & VCP Base
+>     2. Ascending Value Area & Breakout Valid
+>     3. Pullback to Demand & Anchored VWAP Re-test
+>     4. Capitulation Double-Bottom & Seller Exhaustion
+>     5. Institutional Cost-Basis Discount Accumulation
+>     6. Multi-Day Distribution / Markdown Waterfall Trap
+>   - Swing Action Taxonomy: `STRONG_BUY` (score >= 80), `BUY_ON_WEAKNESS` (score 60 - 79 or tape-painted breakout), `WAIT_FOR_TRIGGER` (score 40 - 59 with valid base/reversal setup), `AVOID` (ARB floor lock or illiquid), `AVOID_DISTRIBUTION` (active markdown waterfall or trapped legacy distribution).
+> - **Trap Detection & Broken Support Verification**: Integrate morning ORB bull trap (`orb_bull_trap`), passive bid wall fractures (`broken_walls`), low-level bid collapse (`bid_collapsed_low`), and floor offer locks (`floor_lock`) into safety actions and JSON schemas.
 > - **ZIP Pair Key Timestamp Tolerance**: Maintain minute/second download drift tolerance in `pair_key` to avoid unlinked running trade CSV and trade-book JSON pairs.
-> - **Client Contract Immutability**: Maintain backward compatibility for the output dictionary structure returned by `app.screener.analyze_stock` to avoid breaking frontend clients.
+> - **Client Contract Immutability**: Maintain backward compatibility for the output dictionary structure returned by `app.screener.analyze_stock` and `app.swing_screener.analyze_swing_stock` to avoid breaking frontend clients.
 
 > [!IMPORTANT]
 > **Upstream Live IDX API & Cloudflare Proxy Routing Mandate**:
@@ -86,9 +103,11 @@ peoel-screener-py/
 │   ├── __init__.py          # Package metadata and API version
 │   ├── main.py              # FastAPI app, route handlers, CORS, background tasks, lifespan
 │   ├── cleanup.py           # In-memory spool release, file deletion, stale residual sweeps
-│   └── screener.py          # Pure Python market microstructure & tape reading engine (v3.1)
+│   ├── screener.py          # Pure Python market microstructure & tape reading engine (v3.1)
+│   └── swing_screener.py    # Multi-day 1 - 2 weeks swing trading engine (5-layer composite scoring)
 ├── tests/
-│   └── test_api.py          # Pytest suite covering all API endpoints and scan workflows
+│   ├── test_api.py          # Pytest suite covering intraday API endpoints and scan workflows
+│   └── test_swing_screener.py # Pytest suite covering 7 BEI swing archetypes and 2-file fallback
 ├── temp_residuals/          # Transient directory for temporary ZIP extraction and cleanup
 ├── requirements.txt         # Pinned project dependencies
 ├── run.py                   # Local development launcher
@@ -101,12 +120,12 @@ peoel-screener-py/
 ## 🧪 Quality Assurance & Verification Standards
 
 1. **Mandatory Test Execution**:
-   - Before declaring any task complete, run the test suite and verify that all tests pass:
+   - Before declaring any task complete, run the swing screener test suite and verify that all tests pass:
      ```powershell
-     .\.venv\Scripts\pytest
+     .\.venv\Scripts\pytest tests/test_swing_screener.py -v -p no:cacheprovider
      ```
    - All tests must pass with zero failures and zero unhandled exceptions.
 2. **Test Coverage for New Functionality**:
-   - Every new route, query parameter, form field, or calculation adjustment must include corresponding test cases in `tests/test_api.py`.
+   - Every new route, query parameter, form field, or calculation adjustment must include corresponding test cases in `tests/test_api.py` (intraday) or `tests/test_swing_screener.py` (swing).
 3. **Residual Leak Prevention**:
    - Verify that test runs do not leave residual files or orphan directories in `temp_residuals/` or the OS temporary folder.

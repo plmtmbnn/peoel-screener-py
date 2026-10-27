@@ -20,9 +20,11 @@ from fastapi.responses import JSONResponse
 
 try:
     from app.screener import analyze_stock, CFG, find_pairs_in_dir, compute_all, eval_setups, classify, decide_action, get_setup_score
+    from app.swing_screener import analyze_swing_stock
     from app.cleanup import safe_close_upload, remove_path, clean_stale_files
 except ImportError:
     from screener import analyze_stock, CFG, find_pairs_in_dir, compute_all, eval_setups, classify, decide_action, get_setup_score
+    from swing_screener import analyze_swing_stock
     from cleanup import safe_close_upload, remove_path, clean_stale_files
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -161,6 +163,86 @@ async def analyze_single_ticker(
     except Exception as e:
         logger.exception(f"Unexpected error saat memproses {ticker_clean}: {e}")
         raise HTTPException(status_code=500, detail=f"Gagal memproses data saham {ticker_clean}: {str(e)}")
+
+
+async def _read_optional_json(file: Optional[UploadFile], label: str) -> Optional[Dict[str, Any]]:
+    if not file:
+        return None
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        return None
+    try:
+        return json.loads(raw_bytes.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as je:
+        raise HTTPException(status_code=400, detail=f"Format JSON {label} tidak valid: {str(je)}")
+
+
+@app.post("/api/v1/analyze-swing", tags=["Screener"])
+async def analyze_swing_ticker(
+    background_tasks: BackgroundTasks,
+    historical_file: UploadFile = File(..., description="File CSV Historical Trade (historical-trade_*.csv)"),
+    trade_book_file: UploadFile = File(..., description="File JSON Trade-Book 5m (trade-book-5m_*.json)"),
+    market_detector_file: Optional[UploadFile] = File(None, description="File JSON Market Detector (market-detector_*.json)"),
+    running_trade_chart_file: Optional[UploadFile] = File(None, description="File JSON Running Trade Chart (running-trade-chart_*.json)"),
+    broker_distribution_file: Optional[UploadFile] = File(None, description="File JSON Broker Distribution (broker-distribution_*.json)"),
+    ticker: str = Form("TICKER", description="Kode ticker saham 4 huruf (misal: DOOH, PTRO, BRMS)"),
+    fee_buy: Optional[float] = Form(None, description="Fee beli broker dalam persen (default: 0.15)"),
+    fee_sell: Optional[float] = Form(None, description="Fee jual broker + tax dalam persen (default: 0.25)"),
+):
+    for f in (historical_file, trade_book_file, market_detector_file, running_trade_chart_file, broker_distribution_file):
+        if f is not None:
+            background_tasks.add_task(safe_close_upload, f)
+
+    ticker_clean = (ticker or "TICKER").strip().upper()
+
+    try:
+        hist_bytes = await historical_file.read()
+        tb_bytes = await trade_book_file.read()
+
+        if not hist_bytes:
+            raise HTTPException(status_code=400, detail="File CSV Historical Trade kosong.")
+        if not tb_bytes:
+            raise HTTPException(status_code=400, detail="File JSON Trade-Book kosong.")
+
+        hist_text = hist_bytes.decode("utf-8-sig", errors="replace")
+        hist_rows = list(csv.DictReader(io.StringIO(hist_text)))
+        if not hist_rows:
+            raise HTTPException(status_code=400, detail="Baris data pada CSV Historical Trade tidak ditemukan.")
+
+        try:
+            tb_dict = json.loads(tb_bytes.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as je:
+            raise HTTPException(status_code=400, detail=f"Format JSON Trade-Book tidak valid: {str(je)}")
+
+        md_dict = await _read_optional_json(market_detector_file, "Market Detector")
+        rtc_dict = await _read_optional_json(running_trade_chart_file, "Running Trade Chart")
+        bd_dict = await _read_optional_json(broker_distribution_file, "Broker Distribution")
+
+        cfg_override: Dict[str, Any] = {}
+        if fee_buy is not None:
+            cfg_override["fee_buy_pct"] = fee_buy
+        if fee_sell is not None:
+            cfg_override["fee_sell_pct"] = fee_sell
+
+        result = analyze_swing_stock(
+            historical_source=hist_rows,
+            trade_book_source=tb_dict,
+            market_detector_source=md_dict,
+            running_trade_chart_source=rtc_dict,
+            broker_distribution_source=bd_dict,
+            ticker=ticker_clean,
+            cfg_override=cfg_override,
+        )
+        return JSONResponse(content=result)
+
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        logger.error(f"Validation error saat memproses swing {ticker_clean}: {ve}")
+        raise HTTPException(status_code=422, detail=str(ve))
+    except Exception as e:
+        logger.exception(f"Unexpected error saat memproses swing {ticker_clean}: {e}")
+        raise HTTPException(status_code=500, detail=f"Gagal memproses data swing {ticker_clean}: {str(e)}")
 
 
 @app.post("/api/v1/scan-zip", tags=["Screener"])

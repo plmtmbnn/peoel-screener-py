@@ -527,6 +527,38 @@ def compute_all(trades, jd):
         rb, rs = tgt_b, tgt_s
     m['bm_recent'] = {'buy': rb, 'sell': rs, 'net': rb - rs}
 
+    # --- Per-menit: cumulative delta, activity & Deteksi ARB / Floor Offer Lock ---
+    by_min = defaultdict(list)
+    for t in cont:
+        by_min[t['t'][:5]].append(t)
+    m['active_min'] = len(by_min)
+    cd, run = [], 0
+    flat_low_mins, low_offer_lot = 0, 0
+    for k in sorted(by_min):
+        ts = by_min[k]
+        run += sum(t['lot'] if t['act'] == 'buy' else -t['lot'] for t in ts)
+        cd.append((k, run))
+        if all(t['p'] == m['low'] for t in ts):
+            b_m = sum(t['lot'] for t in ts if t['act'] == 'buy')
+            s_m = sum(t['lot'] for t in ts if t['act'] == 'sell')
+            if b_m > 0 and s_m == 0:
+                flat_low_mins += 1
+                low_offer_lot += b_m
+    m['cum_delta'] = cd
+    is_floor_locked = (
+        flat_low_mins >= 25
+        and m['close'] <= step(m['low'], 1)
+        and m['close_vs_prev'] <= -6.5
+    )
+    if is_floor_locked:
+        m['arb'] = m['low']
+        m['at_arb'] = m['close'] == m['low']
+    m['floor_lock'] = {
+        'locked': is_floor_locked,
+        'mins': flat_low_mins,
+        'offer_eaten_lot': low_offer_lot,
+    }
+
     # --- Big Money Divergence & Trap Detection ---
     bt = jd.get('book_total', {}) or {}
     bm_b = pi(bt.get('big_money_buy_percentage'))
@@ -541,7 +573,10 @@ def compute_all(trades, jd):
         'false_bull': (bm_b > bm_s and bmrt_s > bmrt_b) or (
             bm_b > 50 and (m['change_pct'] < -1.5 or (m['drop_from_high'] >= 6.0 and m['close_vs_vwap'] <= -1.5))
         ),
-        'false_bear': (bm_s > bm_b and bmrt_b > bmrt_s) or (bm_s > 50 and m['change_pct'] > 5.0),
+        'false_bear': (
+            (bm_s > bm_b and bmrt_b > bmrt_s and m['change_pct'] >= -0.5 and m['close'] > step(m['low'], 1) and not is_floor_locked)
+            or (bm_s > 50 and m['change_pct'] > 5.0)
+        ),
     }
 
     # --- Interval Waktu Kontinu ---
@@ -568,17 +603,6 @@ def compute_all(trades, jd):
         ivs.append(iv)
     m['intervals'] = ivs
 
-    # --- Per-menit: cumulative delta & activity ---
-    by_min = defaultdict(list)
-    for t in cont:
-        by_min[t['t'][:5]].append(t)
-    m['active_min'] = len(by_min)
-    cd, run = [], 0
-    for k in sorted(by_min):
-        run += sum(t['lot'] if t['act'] == 'buy' else -t['lot'] for t in by_min[k])
-        cd.append((k, run))
-    m['cum_delta'] = cd
-
     # --- Kondisi Terkini (Flow 15 Menit & Speed of Tape) ---
     w0 = m['now_s'] - CFG['recent_min'] * 60
     rec = [t for t in cont if t['s'] > w0] or cont[-1:]
@@ -590,7 +614,11 @@ def compute_all(trades, jd):
     near_high = m['last'] >= m['high'] - rng * 0.10
     near_low = m['last'] <= m['low'] + rng * 0.10
     buy_at_low_lot = sum(t['lot'] for t in rec if t['p'] == m['low'] and t['act'] == 'buy')
-    bid_collapsed_low = m['last'] == m['low'] and buy_at_low_lot > 0 and buy_at_low_lot >= rb_lot * 0.5
+    bid_collapsed_low = (
+        (m['last'] == m['low'] or m['close'] == m['low'] or is_floor_locked)
+        and buy_at_low_lot > 0
+        and buy_at_low_lot >= rb_lot * 0.5
+    )
     m['recent'] = {
         'minutes': CFG['recent_min'], 'n': len(rec), 'delta': rb_lot - rs_lot,
         'buy_pct': pct(rb_lot, rb_lot + rs_lot),
@@ -599,7 +627,7 @@ def compute_all(trades, jd):
         'speed': (rec_rate / avg_rate) if avg_rate else 0.0,
         'near_high': near_high, 'near_low': near_low,
         'bear_div': near_high and (rb_lot - rs_lot) < 0,
-        'bull_div': near_low and (rb_lot - rs_lot) > 0 and not bid_collapsed_low and (m['last'] > m['low'] or rec[-1]['p'] > rec[0]['p']),
+        'bull_div': near_low and (rb_lot - rs_lot) > 0 and not bid_collapsed_low and not is_floor_locked and m['close'] > m['low'] and (m['last'] > m['low'] or rec[-1]['p'] > rec[0]['p']),
         'bid_collapsed_low': bid_collapsed_low,
         'gap_min': (CONT_END - m['now_s']) / 60.0 if m['is_live'] else 0.0,
     }
@@ -662,7 +690,7 @@ def compute_all(trades, jd):
         return sum(t['lot'] for t in cont if t['p'] == vpoc and t['act'] == 'sell' and t['bon'] in ids)
     m['vpoc_abs_mid'] = absorb_at_vpoc(0.10 * B)
     m['vpoc_abs_small'] = absorb_at_vpoc(0.02 * B)
-    wall_thr = max(int(0.25 * B), 500)
+    wall_thr = max(int(0.10 * B), 500)
     broken_walls = [v for _, v, n in m['bp_nature'] if v['pas'] >= wall_thr and m['last'] < min(v['prices'])]
     held_walls = [v for _, v, n in m['bp_nature'] if v['pas'] >= wall_thr and m['last'] >= min(v['prices'])]
     m['broken_walls'] = len(broken_walls)
@@ -725,15 +753,20 @@ def compute_all(trades, jd):
     haki_5 = pct(sum(t['lot'] for t in first_5 if t['act'] == 'sell'), sum(t['lot'] for t in first_5)) if first_5 else 0
     declining = len(ivs) >= 3 and all(iv['c'] <= iv['o'] for iv in ivs[:3])
     haki_tot = pct(m['sell_lot'], m['total_lot'])
+    haki_ex_lock = pct(
+        m['sell_lot'],
+        max(m['total_lot'] - (m['floor_lock']['offer_eaten_lot'] if m['floor_lock']['locked'] else 0), 1)
+    )
     intraday_collapse = (
-        (m['change_pct'] <= -7.0 or m['drop_from_high'] >= 9.0)
+        (m['change_pct'] <= -7.0 or m['drop_from_high'] >= 9.0 or m['floor_lock']['locked'])
         and m['close'] <= step(m['low'], 2)
-        and haki_tot >= 55.0
-        and m['c_delta'] < 0
+        and (haki_tot >= 55.0 or (m['floor_lock']['locked'] and haki_ex_lock >= 55.0))
+        and (m['c_delta'] < 0 or m['floor_lock']['locked'])
     )
     m['waterfall'] = {
         'found': ((declining or m['change_pct'] < -10) and (haki_5 > 60 or m['change_pct'] < -15)) or intraday_collapse,
         'declining': declining, 'haki_5': haki_5, 'intraday_collapse': intraday_collapse,
+        'haki_ex_lock': haki_ex_lock,
     }
 
     # --- TWAP Slicing Distribution ---
@@ -748,13 +781,15 @@ def compute_all(trades, jd):
                  'size': int(sum(v['lot'] for v in best) / len(best)) if best else 0,
                  'spread_min': spread_min}
 
-    # --- Churning Distribution ---
+    # --- Churning Distribution (mengecualikan menit terkunci flat di ARB Offer Lock) ---
     churn_mins, churn_vol, churn_top = 0, 0, 0
     vol_thr = max(1000, 0.002 * m['c_lot'])
     for minute, ts in by_min.items():
         if len(ts) < 10:
             continue
         pr = [t['p'] for t in ts]
+        if max(pr) == m['low'] and sum(t['lot'] for t in ts if t['act'] == 'sell') == 0:
+            continue
         vol = sum(t['lot'] for t in ts)
         if ticks_between(min(pr), max(pr)) <= 1 and vol > vol_thr:
             churn_mins += 1; churn_vol += vol
@@ -865,37 +900,50 @@ def eval_setups(m):
         s1['checks_pending'].append(("Level Low harus didominasi HAKI (≈100%)", f"Buy ratio saat ini {z['buy_ratio']:.1f}%"))
     
     rebound_ticks = ticks_between(z['level'], z['recovery_high'])
+    round_trip_bleed = (
+        rebound_ticks >= 4
+        and (m['high'] - m['last']) >= 0.70 * max(m['high'] - z['level'], 1)
+        and m['last'] < m['vwap']
+        and m['c_delta'] < 0
+        and m['bm_rt_net'] < 0
+    )
     support_proven = z['held_min'] >= 5 or rebound_ticks >= 3
     check(s1, support_proven,
           'Low teruji sebagai support (bertahan ≥ 5 menit atau rebound ≥ 3 tick)',
           f"Bertahan {z['held_min']:.0f} menit / High {z['recovery_high']} (+{rebound_ticks} tick)",
           'Low harus teruji (bertahan ≥ 5 menit atau memantul ≥ 3 tick)',
           f"Baru {z['held_min']:.0f} menit sejak sentuhan terakhir")
-    check(s1, z['recovered'],
-          'Rebound konfirmasi ≥ 2 tick terbentuk', f"High paska low: {z['recovery_high']} (+{rebound_ticks} tick)",
-          'Wajib rebound minimal +2 tick dari low', f"Menunggu pantulan ≥ {step(z['level'], 2)}")
+    check(s1, z['recovered'] and not round_trip_bleed,
+          'Rebound konfirmasi ≥ 2 tick terbentuk & bertahan', f"High paska low: {z['recovery_high']} (+{rebound_ticks} tick)",
+          'Rebound pagi GAGAL bertahan (harga longsor kembali ke dekat low di bawah VWAP dengan distribusi)' if round_trip_bleed else 'Wajib rebound minimal +2 tick dari low',
+          f"High {z['recovery_high']} → balik ke {m['last']} (< VWAP {m['vwap']:.1f})" if round_trip_bleed else f"Menunggu pantulan ≥ {step(z['level'], 2)}")
 
     e_lo, e_hi = step(z['level'], 1), step(z['level'], 2)
     sl = step(z['level'], -1)
     tp1 = m['vpoc'] if m['vpoc'] > e_hi else step(e_hi, 3)
     tp2 = m['high'] if m['high'] > tp1 else step(tp1, 3)
     ext = extended_ticks(m, e_hi)
-    ok_sig = (z['is_zero'] or z['is_near_zero']) and z['recovered'] and not m['waterfall']['found']
+    ok_sig = (z['is_zero'] or z['is_near_zero']) and z['recovered'] and not round_trip_bleed and not m['waterfall']['found']
     if ok_sig and ext <= chase:
         status, act = 'READY TO ENTER', True
     elif ok_sig:
         status, act = f'EXTENDED (+{ext} tick di atas zona) - TUNGGU PULLBACK', False
+    elif round_trip_bleed:
+        status, act = 'FAILED REBOUND (ROUND-TRIP BLEED DI BAWAH VWAP)', False
     else:
         status, act = 'WAITING TRIGGER', False
     s1['params'] = mk_params(
         m, status, e_lo, e_hi, sl, tp1, tp2, "45 - 60 menit",
-        f"Entri beli saat harga re-test zona {e_lo}-{e_hi} dengan konfirmasi transaksi agresif", act,
+        f"HAKA offer saat harga re-test zona {e_lo}-{e_hi} dengan print agresif", act,
         sl_note=f"(1 tick di bawah Low {z['level']})", tp1_note='(Area VPOC)', tp2_note='(High Sesi)')
     setups.append(s1)
 
     # ── SETUP 2: TWIN-SWEEP BREAKOUT ───────────────────────────
     tw = m['twin_sweep']
     s2 = new(2, 'Twin-Sweep Breakout', 'MOMENTUM AGGRESSIVE', 'ASLI, FORU')
+    entry = m['last']
+    base = tw['last']['base'] if tw['last'] else step(entry, -4)
+    sweep_failed = bool(tw['last'] and m['last'] < step(base, -2))
     if tw['count'] >= 2:
         s2['checks_met'].append((f"Terdeteksi ≥ 2 parent buy agresif ≥ {fmt(B)} lot", f"{tw['count']} order ditemukan"))
     elif tw['count'] == 1:
@@ -905,29 +953,30 @@ def eval_setups(m):
         s2['checks_pending'].append((f"Wajib ada ≥ 2 parent order buy ≥ {fmt(B)} lot", "Belum ada sweep blok"))
     check(s2, tw['coord'] > 0,
           f"Dua sweep dimulai ≤ {CFG['twin_coord_sec']} detik (terkoordinasi)", f"{tw['coord']} pasang sweep berdekatan",
-          'Dua sweep harus terjadi dalam interval singkat terkoordinasi', "Nihil sweep berpasangan")
-    check(s2, tw['multi_level'],
-          'Sweep menyapu offer di beberapa fraksi harga sekaligus', "Agresi vertikal tervalidasi",
-          'Sweep harus melompati offer secara vertikal (≥ 2 harga)', "Menunggu multi-tick sweep")
-    fresh = tw['age_min'] is not None and tw['age_min'] <= CFG['hot_min']
+          'Dua sweep harus terjadi nyaris bersamaan (1 sindikat/institusi)', "Nihil sweep berpasangan")
+    check(s2, tw['multi_level'] and not sweep_failed,
+          'Sweep melahap offer di beberapa fraksi harga sekaligus & struktur bertahan', "Agresi vertikal tervalidasi",
+          f'Sweep pagi GAGAL bertahan (harga jebol di bawah base sweep {base} → {m["last"]})' if sweep_failed else 'Sweep harus melompati offer secara vertikal (≥ 2 harga)',
+          f"Base {base} jebol ke {m['last']}" if sweep_failed else "Menunggu multi-tick sweep")
+    fresh = tw['age_min'] is not None and tw['age_min'] <= CFG['hot_min'] and not sweep_failed
     check(s2, fresh,
-          f"Sweep terakhir masih berada dalam jendela aktif (≤ {CFG['hot_min']} menit)", f"Umur sweep: {tw['age_min'] or 0:.0f} menit",
-          f"Sweep terakhir melewati batas jendela aktif (> {CFG['hot_min']} menit) atau belum ada",
+          f"Sweep terakhir masih segar (≤ {CFG['hot_min']} menit)", f"Umur sweep: {tw['age_min'] or 0:.0f} menit",
+          f"Sweep terakhir sudah basi (> {CFG['hot_min']} menit) atau belum ada",
           f"Umur sweep: {'-' if tw['age_min'] is None else f'{tw['age_min']:.0f} menit'}")
 
-    entry = m['last']
-    base = tw['last']['base'] if tw['last'] else step(entry, -4)
     sl = step(base, -2)
     tp1 = step(entry, 4)
-    if tw['found'] and tw['coord'] > 0 and fresh:
-        status, act = 'TRIGGERED (ACTIVE)', True
+    if sweep_failed:
+        status, act = f'SWEEP FAILED (HARGA JEBOL DI BAWAH BASE {base})', False
+    elif tw['found'] and tw['coord'] > 0 and fresh:
+        status, act = 'TRIGGERED (HOT)', True
     elif tw['found'] and tw['coord'] > 0:
-        status, act = 'TRIGGERED (EXPIRED - sweep melewati jendela waktu, hindari kejar harga)', False
+        status, act = 'TRIGGERED (STALE - sweep sudah lama, JANGAN kejar)', False
     else:
         status, act = 'MONITORING', False
     s2['params'] = mk_params(
         m, status, entry, entry, sl, tp1, m['ara'], "15 - 30 menit",
-        "Entri beli segera setelah order sweep kedua terkonfirmasi di Running Trade", act,
+        "Ikuti HAKA segera setelah sweep kedua tereksekusi di Running Trade", act,
         entry_note='HAKA paska sweep kedua', sl_note=f"(2 tick di bawah base sweep {base})",
         tp1_note='(+4 tick)', tp2_text=f"{fp(m['ara'], entry)} (ARA, prev {m['prev_close']})")
     setups.append(s2)
@@ -940,16 +989,21 @@ def eval_setups(m):
     check(s3, vpoc_elevated,
           f"VPOC ({vp_}) berada di atas level low (area nilai terangkat)", f"VPOC {vp_} vs Low {m['low']}",
           'Harga harus membentuk VPOC di atas level terendah', f"VPOC mepet low ({m['low']})")
-    vpoc_held = dist >= -1 and not (vp_ == m['low'] and m['recent']['bid_collapsed_low'])
+    vpoc_held = (
+        vp_ > m['low']
+        and not m['recent']['bid_collapsed_low']
+        and not m['floor_lock']['locked']
+        and (dist >= 0 or (dist == -1 and m['last'] > m['low'] and m['close'] > m['low']))
+    )
     if m['vpoc_abs_mid'] >= 0.10 * B and vpoc_held:
         s3['checks_met'].append((f"Bid pasif besar (parent ≥ {fmt(0.10 * B)} lot) menyerap & menahan harga di VPOC {vp_}", f"Serapan: {fmt(m['vpoc_abs_mid'])} lot"))
     elif m['vpoc_abs_mid'] >= 0.10 * B and not vpoc_held:
         s3['checks_pending'].append((f"Support VPOC {vp_} JEBOL ke bawah (serapan {fmt(m['vpoc_abs_mid'])} lot gagal menahan harga)", f"Last {m['last']} ({dist:+d} tick dari VPOC)"))
     elif m['vpoc_abs_small'] >= 0.02 * B and vpoc_held:
         s3['checks_met'].append((f"Penyerapan parsial di VPOC {vp_}", f"Serapan: {fmt(m['vpoc_abs_small'])} lot"))
-        s3['checks_pending'].append((f"Menunggu serapan blok ≥ {fmt(0.10 * B)} lot di VPOC", "Volume penyerapan belum mencapai batas blok"))
+        s3['checks_pending'].append((f"Menunggu serapan blok ≥ {fmt(0.10 * B)} lot di VPOC", "Volume serapan belum masif"))
     else:
-        s3['checks_pending'].append((f"Wajib ada serapan bid pasif ≥ {fmt(0.10 * B)} lot yang bertahan di VPOC", "Belum terdeteksi antrean bid besar bertahan di VPOC"))
+        s3['checks_pending'].append((f"Wajib ada serapan bid pasif ≥ {fmt(0.10 * B)} lot yang bertahan di VPOC", "Nihil big bid bertahan di VPOC"))
     check(s3, m['vpoc_pct'] >= CFG['vpoc_min_pct'],
           'VPOC memvalidasi akumulasi volume sesi', f"Vol: {fmt(m['vpoc_lot'])} lot ({m['vpoc_pct']:.1f}% volume kontinu)",
           f"VPOC belum dominan (≥ {CFG['vpoc_min_pct']:.0f}% volume)", f"Hanya {m['vpoc_pct']:.1f}% volume")
@@ -972,7 +1026,7 @@ def eval_setups(m):
     s3['params'] = mk_params(
         m, s3_st,
         e_lo, e_hi, sl, tp1, tp2, "60 - 90 menit",
-        f"Entri beli saat harga re-test VPOC {vp_} dengan konfirmasi penebalan antrean bid", ready,
+        f"Masuk HAKA saat harga re-test VPOC {vp_} dan antrean bid ditebalkan kembali", ready,
         sl_note='(2 tick di bawah VPOC)', tp1_note='(+3 tick dari zona entry)', tp2_note='(High Sesi)')
     setups.append(s3)
 
@@ -987,11 +1041,11 @@ def eval_setups(m):
           'Wajib minimal 2 anak tangga naik', f"Baru {st['steps']} steps")
     check(s4, bullish_ivs >= max(n_iv // 2, 1), 'Net Delta positif di mayoritas interval', f"{bullish_ivs}/{n_iv} interval bullish",
           'Net Delta interval harus didominasi pembeli', f"{bullish_ivs}/{n_iv} bullish")
-    check(s4, m['top_sell_lot'] < 0.6 * B, 'Struktur terjaga tanpa sell blok besar (≥ 0.6x blok)', f"Top sell parent: {fmt(m['top_sell_lot'])} lot",
-          'Tekanan jual blok besar berisiko menekan struktur harga', f"Tercatat sell {fmt(m['top_sell_lot'])} lot")
+    check(s4, m['top_sell_lot'] < 0.6 * B, 'Nihil sell blok masif penghancur struktur', f"Top sell parent: {fmt(m['top_sell_lot'])} lot",
+          'Struktur rawan hancur akibat blok sell raksasa', f"Tercatat sell {fmt(m['top_sell_lot'])} lot")
     check(s4, m['change_pct'] >= 2.0 and not m['is_range_bound'], 'Tren kenaikan sesi terkonfirmasi (> +2.0%)', f"Perubahan: {m['change_pct']:+.2f}%",
           'Wajib momentum kenaikan aktif (> +2.0%)', f"Perubahan: {m['change_pct']:+.2f}%")
-    check(s4, m['c_delta'] >= 0 or m['bm_rt_net'] >= 0, 'Order flow didominasi transaksi beli (HAKA)', f"Net Delta: {m['c_delta']:+,} lot | BM-RT net {m['bm_rt_net']:+,}",
+    check(s4, m['c_delta'] >= 0 or m['bm_rt_net'] >= 0, 'Order flow agresif didominasi HAKA', f"Net Delta: {m['c_delta']:+,} lot | BM-RT net {m['bm_rt_net']:+,}",
           'Net Delta sesi harus positif (pembeli mendominasi)', f"Net Delta: {m['c_delta']:+,} lot | BM-RT net {m['bm_rt_net']:+,}")
     check(s4, m['last'] >= m['vwap'], 'Harga di atas VWAP (kontrol pembeli)', f"Last {m['last']} vs VWAP {m['vwap']:.1f}",
           'Harga harus bertahan di atas VWAP', f"Last {m['last']} < VWAP {m['vwap']:.1f}")
@@ -1000,7 +1054,7 @@ def eval_setups(m):
     tp1 = step(entry, 3)
     s4['params'] = mk_params(
         m, 'ACTIVE TREND (BUY ON PULLBACK)' if st['is'] else 'FORMING', entry, entry, sl, tp1, tp1,
-        "90 - 120 menit", "Entri beli saat penembusan level tertinggi pijakan sebelumnya atau saat pullback", bool(st['is']),
+        "90 - 120 menit", "HAKA saat penembusan level tertinggi pijakan sebelumnya", bool(st['is']),
         entry_note='Breakout atau pullback pijakan', sl_note='(1-2 tick di bawah pijakan)',
         tp1_note='(+3 tick)', tp2_text='Trailing Stop per pijakan tangga baru')
     setups.append(s4)
@@ -1009,14 +1063,14 @@ def eval_setups(m):
     cl = m['climax']
     s5 = new(5, 'Selling Climax Exhaustion Reversal', 'CONTRARIAN V-SHAPE', 'BRMS')
     if cl['bazookas'] >= 3:
-        s5['checks_met'].append((f"Volume jual blok institusi (≥ 3 order ≥ {fmt(B)} lot)", f"{cl['bazookas']} blok sell"))
+        s5['checks_met'].append((f"Bazooka Sell masif (≥ 3 order ≥ {fmt(B)} lot)", f"{cl['bazookas']} bazooka sell"))
     elif cl['bazookas'] >= 1:
-        s5['checks_met'].append((f"Volume jual blok institusi (1-2 order ≥ {fmt(B)} lot)", f"{cl['bazookas']} order tercatat"))
-        s5['checks_pending'].append(('Menunggu konfirmasi volume jual lanjutan untuk pembentukan klimaks', "Klimaks belum terbentuk"))
+        s5['checks_met'].append((f"Bazooka Sell (1-2 order ≥ {fmt(B)} lot)", f"{cl['bazookas']} order tercatat"))
+        s5['checks_pending'].append(('Menunggu rentetan bazooka lanjutan untuk klimaks', "Klimaks belum sempurna"))
     else:
-        s5['checks_pending'].append((f"Wajib ada order jual blok institusi (≥ {fmt(B)} lot)", "Belum terdeteksi blok sell"))
-    check(s5, cl['peak_vol'] > m['c_lot'] * 0.05, 'Volume puncak HAKI tercapai (klimaks jual)', f"Peak: {fmt(cl['peak_vol'])} lot @ {cl['peak_min']}",
-          'Volume HAKI per menit harus menunjukkan lonjakan tajam', "Tekanan jual merata, bukan klimaks")
+        s5['checks_pending'].append((f"Wajib ada tembakan panik institusi (order ≥ {fmt(B)} lot)", "Nihil bazooka sell"))
+    check(s5, cl['peak_vol'] > m['c_lot'] * 0.025, 'Volume puncak HAKI tercapai (klimaks jual)', f"Peak: {fmt(cl['peak_vol'])} lot @ {cl['peak_min']}",
+          'Volume HAKI per menit harus lonjakan ekstrem', "Tekanan jual merata, bukan klimaks")
     vs = m['vshape']
     check(s5, vs['found'], 'Pantulan V-Shape setelah kejatuhan tajam', f"Drop {vs['drop_pct']:.1f}% lalu retrace {min(vs['retrace'], 100):.0f}%",
           'Wajib ada drop ≥ 3% lalu pantulan ≥ 50% dari drop', f"Drop {vs['drop_pct']:.1f}%, retrace {min(vs['retrace'], 100):.0f}%")
@@ -1027,9 +1081,9 @@ def eval_setups(m):
     ext = extended_ticks(m, e_lo)
     ok_sig = cl['bazookas'] >= 1 and vs['found']
     s5['params'] = mk_params(
-        m, ('REVERSAL CONFIRMED' if ext <= chase + 2 else f'REVERSAL SUDAH BERJALAN (+{ext} tick) - TUNGGU PULLBACK') if ok_sig else 'WAITING EXHAUSTION',
+        m, ('REVERSAL CONFIRMED' if ext <= chase + 2 else f'REVERSAL SUDAH JALAN (+{ext} tick) - TUNGGU PULLBACK') if ok_sig else 'WAITING EXHAUSTION',
         e_lo, e_lo, sl, tp1, tp2, "30 - 45 menit",
-        "Hindari entry mendahului konfirmasi: masuk hanya saat volume HAKI turun < 25% puncak dan harga memantul minimal 2 tick",
+        "JANGAN tangkap pisau jatuh! Masuk hanya saat volume HAKI turun < 25% puncak dan harga memantul 2 tick",
         bool(ok_sig and ext <= chase + 2),
         entry_note='setelah HAKI menyusut', sl_note='(1 tick di bawah Low Climax)', tp1_note='(VPOC)', tp2_note='(Open / High)')
     setups.append(s5)
@@ -1042,15 +1096,15 @@ def eval_setups(m):
         lvls = ', '.join(str(l['level']) for l in ps['levels'])
         s6['checks_met'].append((f"Harga menembus level psikologis (kelipatan {ps['step']})", f"Level: {lvls}"))
         top_lv = max(ps['levels'], key=lambda x: x['vol'])
-        check(s6, top_lv['vol'] > m['c_lot'] * 0.01, f"Volume signifikan diserap di level {top_lv['level']}",
+        check(s6, top_lv['vol'] > m['c_lot'] * 0.01, f"Volume masif diserap di level {top_lv['level']}",
               f"{fmt(top_lv['vol'])} lot ({pct(top_lv['vol'], m['c_lot']):.1f}%)",
               f"Volume di level {top_lv['level']} harus mencerminkan penyerapan", "Volume tipis")
         check(s6, bool(held_up), 'Harga bertahan di atas level psikologis', f"Last: {m['last']}",
               'Harga wajib bertahan di atas level psikologis', f"Kembali turun ke {m['last']}")
         ref_lv = max((l['level'] for l in held_up), default=max(l['level'] for l in ps['levels']))
         chop = any(l['down'] for l in ps['levels'])
-        check(s6, not chop, 'Level ditembus bersih tanpa fluktuasi bolak-balik', "Tidak ada penembusan balik",
-              'Level mengalami fluktuasi bolak-balik (risiko false breakout)', "Risiko false breakout")
+        check(s6, not chop, 'Level ditembus bersih (tanpa chop bolak-balik)', "Tidak ada penembusan balik",
+              'Level terindikasi chop (naik-turun menembus berulang)', "False-breakout risk")
     else:
         s6['checks_pending'].append((f"Harga belum menembus level kelipatan {ps['step']}", "Belum ada penembusan ke atas"))
         ref_lv = round_up_to(m['last'] + 1, ps['step'])
@@ -1061,12 +1115,13 @@ def eval_setups(m):
     s6['params'] = mk_params(
         m, ('BREAKOUT VALID' if ext <= chase else f'EXTENDED (+{ext} tick) - TUNGGU RETEST LEVEL') if valid else 'WAITING BREAKOUT',
         e_lo, e_lo, sl, tp1, tp2, "45 - 60 menit",
-        f"Entri beli saat antrean offer tebal pada level {ref_lv} habis terserap", bool(valid and ext <= chase),
+        f"HAKA segera saat antrean offer tebal di {ref_lv} ludes terserap", bool(valid and ext <= chase),
         entry_note=f"1 tick di atas level {ref_lv}", sl_note='(2 tick di bawah level)', tp1_note='(+3 tick)', tp2_note='(+6 tick)')
     setups.append(s6)
 
     # ── SETUP 7: BEARISH WATERFALL / DUMP COLLAPSE ────────────
     wf = m['waterfall']
+    fl = m['floor_lock']
     s7 = new(7, 'Bearish Waterfall / Dump Collapse', 'AVOID / IMMEDIATE CUT LOSS', 'STRK, SMIL, AMRT')
     drop_from_high = m['drop_from_high']
     high_dump = (
@@ -1074,26 +1129,34 @@ def eval_setups(m):
         and m['close_vs_vwap'] <= -1.5
         and (drop_from_high >= 8.0 or (drop_from_high >= 6.0 and m['close'] <= step(m['low'], 2)))
     )
-    check(s7, m['change_pct'] <= -4.0 or high_dump,
+    check(s7, m['change_pct'] <= -4.0 or high_dump or fl['locked'],
           'Penurunan curam / guyuran dari pucuk terkonfirmasi', f"Perubahan: {m['change_pct']:+.2f}% (Drop dari high: -{drop_from_high:.1f}%)",
           'Harga belum anjlok parah (> -4% vs Open atau ≥ -8% dari High)', f"Perubahan: {m['change_pct']:+.2f}% (Drop dari high: -{drop_from_high:.1f}%)")
     haki_ratio = pct(m['sell_lot'], m['total_lot'])
-    check(s7, haki_ratio > 52.0 or wf['haki_5'] > 55.0, 'Volume dikuasai penjual HAKI agresif',
-          f"Total HAKI: {haki_ratio:.1f}% (5 menit awal: {wf['haki_5']:.1f}%)",
+    haki_ex_lock = wf.get('haki_ex_lock', haki_ratio)
+    check(s7, haki_ratio > 52.0 or wf['haki_5'] > 55.0 or (fl['locked'] and haki_ex_lock > 55.0),
+          'Volume dikuasai penjual HAKI agresif',
+          f"Total HAKI: {haki_ratio:.1f}% (Ex-ARB lock: {haki_ex_lock:.1f}% | 5m awal: {wf['haki_5']:.1f}%)" if fl['locked'] else f"Total HAKI: {haki_ratio:.1f}% (5 menit awal: {wf['haki_5']:.1f}%)",
           'Dominasi HAKI agresif belum dominan', f"HAKI: {haki_ratio:.1f}%")
-    check(s7, m['range_pct'] >= 4.0 and m['close'] <= step(m['low'], 3), 'Harga tutup di dekat dasar sesi (waterfall collapse)',
-          f"Close {m['close']} mepet Low {m['low']} (posisi {m['close_pos']:.0f}% rentang)", 'Harga memantul dari level terendah', f"Close {m['close']} vs Low {m['low']}")
-    bm_dump = m['bm_rt_net'] < 0 or (m['c_delta'] < 0 and m['bm_div']['bm_sell'] > m['bm_div']['bm_buy'])
+    check(s7, (m['range_pct'] >= 4.0 and m['close'] <= step(m['low'], 3)) or fl['locked'],
+          'Harga tutup di dekat dasar sesi (waterfall collapse / ARB Offer Lock)',
+          f"Close {m['close']} mepet Low {m['low']} (posisi {m['close_pos']:.0f}% rentang" + (f", ARB Lock {fl['mins']}m)" if fl['locked'] else ")"),
+          'Harga memantul dari level terendah', f"Close {m['close']} vs Low {m['low']}")
+    bm_dump = (
+        m['bm_rt_net'] < 0
+        or (m['c_delta'] < 0 and m['bm_div']['bm_sell'] > m['bm_div']['bm_buy'])
+        or (fl['locked'] and (m['c_delta'] < 0 or m['bm_rt_net'] - fl['offer_eaten_lot'] < 0))
+    )
     check(s7, bm_dump, 'Aliran Big Money net distribusi (dump)',
-          f"BM RT Net: {m['bm_rt_net']:+,} lot | Net Delta: {m['c_delta']:+,} lot",
+          f"BM RT Net: {m['bm_rt_net']:+,} lot | Net Delta: {m['c_delta']:+,} lot" + (f" (Offer ARB dimakan: {fmt(fl['offer_eaten_lot'])} lot)" if fl['locked'] else ""),
           'Big Money Net masih akumulasi', f"BM RT Net: {m['bm_rt_net']:+,} lot")
     n_met = len(s7['checks_met'])
     s7['params'] = {
         'status': 'DANGER: DO NOT BUY / CUT LOSS NOW' if n_met >= 3 else ('ALERT: HIGH RISK' if n_met >= 2 else 'CLEAR (NO WATERFALL)'),
         'actionable': False,
-        'entry_zone': "DILARANG MASUK (NO BUY ZONE)", 'cut_loss': "EKSEKUSI SEGERA DI HARGA PASAR (HIT BID)",
+        'entry_zone': "DILARANG MASUK (NO BUY ZONE)", 'cut_loss': "SEKETIKA DI HARGA PASAR (BUANG DI BID)",
         'tp1': "NIHIL", 'tp2': "NIHIL", 'rrr': "N/A", 'max_holding': "0 menit",
-        'trigger_rule': "Terdeteksi pola dump atau collapse. Hindari averaging down dan lakukan cut loss tanpa menunggu pantulan harga."}
+        'trigger_rule': "Jika terdeteksi dump/collapse, JANGAN averaging down! CUT LOSS tanpa menunggu rebound!"}
     setups.append(s7)
 
     # ── SETUP 8: RANGE-BOUND SQUEEZE ABSORPTION ───────────────
@@ -1116,9 +1179,9 @@ def eval_setups(m):
     near_sup = m['last'] <= step(e_hi, chase)
     active = len(s8['checks_met']) >= 3
     s8['params'] = mk_params(
-        m, ('RANGE SCALPING ACTIVE (BUY AT SUPPORT ONLY)' if near_sup else 'RANGE ACTIVE - HARGA DI AREA TENGAH/ATAS, TUNGGU KE SUPPORT') if active else 'WATCHLIST COIL',
+        m, ('RANGE SCALPING ACTIVE (BUY AT SUPPORT ONLY)' if near_sup else 'RANGE ACTIVE - HARGA DI TENGAH/ATAS, TUNGGU KE SUPPORT') if active else 'WATCHLIST COIL',
         e_lo, e_hi, sl, tp1, tp2, "45 - 60 menit per ayunan",
-        "Disiplin range scalping: beli hanya di batas support dengan penebalan antrean bid. Hindari pembelian agresif di area resistance atau VPOC.",
+        "DISIPLIN PING-PONG: beli hanya di support bawah dengan bid menebal. JANGAN HAKA di resisten/VPOC!",
         bool(active and near_sup), entry_note='Batas bawah rentang / demand',
         sl_note=f"(1 tick di bawah Low {m['low']})", tp1_note='(VPOC)', tp2_note='(Batas atas rentang)')
     setups.append(s8)
@@ -1167,49 +1230,49 @@ def classify(m):
         (1, zal or near0, 'Zero-Ask Low terkonfirmasi'),
     ])
     score('Lightning Rocket & Churn (FORU)', [
-        (3, bull and rng > 10, 'Rentang ekspansi sesi > 10%'),
-        (3, twin or tbl >= 1.0, 'Order beli blok besar (≥ 1x blok) di awal sesi'),
-        (2, churn, 'Rotasi distribusi / Churning di area resistance'),
-        (2, m['bm_div']['bmrt_bull'], 'Running BM-RT dominan beli'),
+        (3, bull and rng > 10, 'Range ekspansif > 10%'),
+        (3, twin or tbl >= 1.0, 'Sweep raksasa ≥ blok di pagi hari'),
+        (2, churn, 'Distribusi / Churning di pucuk'),
+        (2, m['bm_div']['bmrt_bull'], 'Running BM-RT dominan buy'),
     ])
     score('Staircase Precision (MBMA / KETR)', [
         (4, stair, 'Pola tangga presisi terkonfirmasi'),
-        (2, 0.02 <= tbl <= 0.6, 'Parent order terukur (0.02x s/d 0.6x blok)'),
+        (2, 0.02 <= tbl <= 0.6, 'Parent order terukur (0.02x - 0.6x blok)'),
         (2, bull and 2 < m['change_pct'] < 12, 'Kenaikan stabil bertahap (+2% s/d +12%)'),
-        (1, not twin and baz == 0, 'Pergerakan stabil tanpa transaksi blok liar'),
-        (1, m['vpoc'] > m['low'] + (m['high'] - m['low']) * 0.3, 'VPOC di atas 30% rentang harga'),
+        (1, not twin and baz == 0, 'Tanpa bazooka liar'),
+        (1, m['vpoc'] > m['low'] + (m['high'] - m['low']) * 0.3, 'VPOC di atas 30% rentang'),
     ])
     score('Nimble Skirmish (OASA)', [
-        (3, zal and m['zal']['recovered'], 'Zero-Ask Low dengan rebound bersih'),
-        (2, tv < 50e9, 'Turnover lincah (< Rp 50 Miliar)'),
-        (2, tbl < 0.5, 'Parent order terukur (< 0.5x blok)'),
+        (3, zal and m['zal']['recovered'], 'Zero-Ask Low + Rebound bersih'),
+        (2, tv < 50e9, 'Turnover lincah (< Rp 50B)'),
+        (2, tbl < 0.5, 'Parent order gesit (< 0.5x blok)'),
         (2, bull and 2 < m['change_pct'] < 10, 'Kenaikan terukur (+2% s/d +10%)'),
         (1, rng < 15, 'Rentang pergerakan teratur (< 15%)'),
     ])
     score('Whale Bazooka War (BRMS)', [
-        (4, baz >= 1, 'Transaksi jual blok besar institusi (order ≥ blok)'),
-        (3, m['zal']['recovered'] and abs(m['change_pct']) < 4, 'Pantulan V-Shape (rebound menuju netral)'),
-        (2, tv > 100e9, 'Turnover likuid > Rp 100 Miliar'),
-        (1, tsl >= 1.0, 'Parent sell besar ≥ 1x blok'),
+        (4, baz >= 1, 'Tembakan Bazooka Sell (order ≥ blok)'),
+        (3, m['zal']['recovered'] and abs(m['change_pct']) < 4, 'Pantulan V-Shape (rebound ke flat)'),
+        (2, tv > 100e9, 'Turnover raksasa > Rp 100B'),
+        (1, tsl >= 1.0, 'Parent sell raksasa ≥ 1x blok'),
     ])
     score('Range-Bound Squeeze (PTRO / DOOH)', [
-        (4, m['compressed'] and abs(m['change_pct']) <= 2.0, 'Rentang terkompresi ketat dan flat (Chg ≤ 2%)'),
+        (4, m['compressed'] and abs(m['change_pct']) <= 2.0, 'Rentang sempit terkompresi & flat (Chg ≤ 2%)'),
         (3, m['mid_conc'] >= 45.0, 'Konsentrasi volume di 3 tick VPOC (≥ 45%)'),
-        (2, tv >= 15e9, 'Turnover likuid aktif (≥ Rp 15 Miliar)'),
-        (1, not twin and baz == 0, 'Pergerakan tertib tanpa lonjakan panik'),
+        (2, tv >= 15e9, 'Turnover likuid aktif (> Rp 15B)'),
+        (1, not twin and baz == 0, 'Tanpa panic dump liar'),
     ])
     score('Distribution Blue Chip (AMRT / SMIL)', [
         (3, (not bull and m['change_pct'] > -8) or m['orb_bull_trap'], 'Pelemahan bertahap / distribusi paska pancingan pagi'),
         (3, fbu or twap or m['orb_bull_trap'], 'False Bullish BM / TWAP sell / Morning Bull Trap'),
         (2, twap or m['bm_rt_net'] < 0, 'Distribusi institusi konsisten'),
-        (1, tv > 15e9, 'Turnover likuid > Rp 15 Miliar'),
+        (1, tv > 15e9, 'Turnover likuid > Rp 15B'),
         (1, rng < 10, 'Rentang volatilitas terkontrol (< 10%)'),
     ])
     score('Speculative Collapse (STRK)', [
-        (4, m['change_pct'] <= -8.0 or m['drop_from_high'] >= 9.5, 'Penurunan curam (≤ -8% atau drop dari high ≥ 9.5%)'),
-        (3, wf, 'Pola Waterfall / Intraday Collapse terkonfirmasi'),
-        (2, (not zal and not near0) or m['broken_walls'] >= 5, 'Zero-Ask Low gagal / tembok bid jebol masif'),
-        (1, m['waterfall']['haki_5'] > 50 or pct(m['sell_lot'], m['total_lot']) >= 55.0, 'Dominasi HAKI agresif (≥ 55%)'),
+        (4, m['change_pct'] <= -8.0 or m['drop_from_high'] >= 9.5 or m['floor_lock']['locked'], 'Kejatuhan curam (≤ -8% / drop ≥ 9.5% / terkunci ARB Offer Lock)'),
+        (3, wf, 'Pola Waterfall / Intraday Collapse'),
+        (2, (not zal and not near0) or m['broken_walls'] >= 5 or m['floor_lock']['locked'], 'Zero-Ask Low GAGAL / tembok bid jebol / ARB Offer Lock'),
+        (1, m['waterfall']['haki_5'] > 50 or pct(m['sell_lot'], m['total_lot']) >= 55.0 or m['waterfall'].get('haki_ex_lock', 0) >= 55.0, 'Dominasi HAKI agresif (≥ 55%)'),
     ])
 
     results.sort(key=lambda x: x[1], reverse=True)
@@ -1244,21 +1307,25 @@ def decide_action(m, setups, archs):
     best = max(candidates, key=get_setup_score) if candidates else None
     out = {'best': best}
 
-    is_weak_close = m['change_pct'] < -1.5 or (
-        m['change_pct'] < 0 and m['drop_from_high'] >= 6.0 and m['close_vs_vwap'] <= -1.5
+    is_weak_close = (
+        m['change_pct'] < -1.5
+        or (m['change_pct'] < 0 and m['drop_from_high'] >= 6.0 and m['close_vs_vwap'] <= -1.5)
+        or (m['change_pct'] < 0 and m['bm_div']['false_bull'] and m['c_delta'] < 0 and m['bm_rt_net'] < 0 and m['close_pos'] <= 25.0)
     )
-    if s7_score >= 75.0 and m['change_pct'] < 0 and (m['change_pct'] <= -3.5 or m['drop_from_high'] >= 8.0):
+    if (s7_score >= 75.0 and m['change_pct'] < 0 and (m['change_pct'] <= -3.5 or m['drop_from_high'] >= 8.0)) or m['floor_lock']['locked']:
         out.update(label="DANGER: AVOID / CUT LOSS (COLLAPSE DETECTED)", icon="🚨", key='DANGER', rank=0)
     elif is_weak_close and (
         m['bm_div']['false_bull'] or m['orb_bull_trap'] or s7_score >= 75.0
         or 'Distribution' in top[0] or 'Collapse' in top[0]
     ):
         out.update(label="DANGER: BULL TRAP / DISTRIBUTION (DO NOT BUY)", icon="🚨", key='TRAP', rank=0)
-    elif m['is_range_bound']:
+    elif m['is_range_bound'] and not (
+        best and best['id'] in (1, 5) and get_setup_score(best) > get_setup_score(by_id[8]) and best['params'].get('actionable')
+    ):
         s8 = by_id[8]
         if get_setup_score(s8) >= 75.0:
             ok = s8['params'].get('actionable')
-            out.update(label="RANGE-BOUND SQUEEZE (BUY AT SUPPORT ONLY)" + ("" if ok else " - TUNGGU RETEST SUPPORT"),
+            out.update(label="RANGE-BOUND SQUEEZE (PING-PONG SCALP ONLY)" + ("" if ok else " - TUNGGU HARGA KE SUPPORT"),
                        icon="🟡", key='RANGE', rank=2, best=s8)
         else:
             out.update(label="RANGE-BOUND COIL (WAIT FOR RANGE EXPANSION)", icon="🟡", key='COIL', rank=3)
@@ -1271,7 +1338,7 @@ def decide_action(m, setups, archs):
         elif sc >= 80.0 and act:
             out.update(label=f"READY TO TRADE ({best['name'].upper()})", icon="🟢", key='READY', rank=1)
         elif sc >= 80.0:
-            out.update(label=f"SETUP VALID TAPI EXTENDED ({best['name'].upper()}) - TUNGGU PULLBACK", icon="🟡", key='EXTENDED', rank=3)
+            out.update(label=f"SETUP VALID TAPI EXTENDED/STALE ({best['name'].upper()}) - TUNGGU PULLBACK", icon="🟡", key='EXTENDED', rank=3)
         else:
             out.update(label=f"DEVELOPING SETUP ({best['name'].upper()})", icon="🟡", key='DEV', rank=3)
     else:
@@ -1334,9 +1401,9 @@ def print_single_report(m, setups, archetypes, ticker):
     print(f'  Net Delta     : {rec["delta"]:+,} lot (Buy {rec["buy_pct"]:.0f}%) | BM-RT net {m["bm_recent"]["net"]:+,} lot')
     print(f'  Kecepatan Tape: {rec["speed"]:.1f}x rata-rata ({rec["n"]} trades)')
     if rec['bear_div']:
-        print('  ⚠️  BEARISH DELTA DIVERGENCE: harga di area high namun net delta terkini didominasi tekanan jual (HAKI).')
+        print('  ⚠️  BEARISH DELTA DIVERGENCE: harga di area high tapi delta terkini didominasi HAKI!')
     if rec['bull_div']:
-        print('  🟢 BULLISH DELTA DIVERGENCE: harga di area low namun net delta terkini didominasi penyerapan beli (HAKA).')
+        print('  🟢 BULLISH DELTA DIVERGENCE: harga di area low tapi delta terkini didominasi HAKA penyerapan!')
     if rec.get('bid_collapsed_low'):
         print(f'  🚨 BID COLLAPSED AT LOW: Level low Rp {m["low"]} bergeser menjadi antrean Offer (support jebol, rawan lanjut turun)!')
 
@@ -1347,20 +1414,23 @@ def print_single_report(m, setups, archetypes, ticker):
     print(f'  Order-Level BM : Buy {div["bm_buy"]}% vs Sell {div["bm_sell"]}% → {b_label}')
     print(f'  Running BM-RT  : Buy {div["bmrt_buy"]}% vs Sell {div["bmrt_sell"]}% → {rt_label}')
     if div['false_bull']:
-        print('  🚨 FALSE BULLISH TRAP: Order book pasif tampak akumulasi, namun running trade didominasi distribusi jual.')
+        print('  🚨 FALSE BULLISH TRAP: Order book pasif tampak buy, tapi running trade riil diguyur HAKI!')
     elif div['false_bear']:
-        print('  ⚠️  FALSE BEARISH SIGNAL: Offer tebal pada running trade, namun antrean bid menyerap secara konsisten.')
+        print('  ⚠️  FALSE BEARISH SIGNAL: Offer tebal di running trade tapi bid pasif menyerap rapi.')
     else:
-        print('  ✅ Pola Big Money dan Running BM-RT bergerak selaras.')
+        print('  ✅ Tidak ada anomali pembacaan antara BM dan BM-RT.')
 
     if m.get('orb_bull_trap'):
         print(f'  🚨 MORNING BULL TRAP: Pancingan tembus ORB High ({m["orb"]["high"]} @ {m["orb"]["up_t"]}) lalu dibanting jebol ORB Low ({m["orb"]["low"]} @ {m["orb"]["dn_t"]})!')
-    if m.get('broken_walls', 0) >= 2:
+    if m.get('floor_lock', {}).get('locked'):
+        fl = m['floor_lock']
+        print(f'  🚨 ARB / FLOOR OFFER LOCK: Harga terkunci di dasar Rp {m["low"]} selama {fl["mins"]} menit (antrean Bid habis; {fmt(fl["offer_eaten_lot"])} lot Buy di Rp {m["low"]} adalah cicilan terhadap tembok Offer, bukan akumulasi bid)!')
+    if m.get('broken_walls', 0) >= 2 and (m['change_pct'] < 0 or m['close_vs_vwap'] < -1.0):
         print(f'  ⚠️  TEMBOK BID JEBOL: {m["broken_walls"]} tembok bid pasif besar ({fmt(m["broken_walls_lot"])} lot) berhasil dijebol guyuran HAKI!')
     if m['twap']['found']:
         print(f'  ⚠️  TWAP slicing: {m["twap"]["cluster"]} parent sell ±{m["twap"]["size"]} lot tersebar {m["twap"]["spread_min"]:.0f} menit')
     if m['churning']['found']:
-        print(f'  ⚠️  Churning: {m["churning"]["mins"]} menit volume tinggi tanpa ekspansi harga ({m["churning"]["at_top"]} di area resistance)')
+        print(f'  ⚠️  Churning: {m["churning"]["mins"]} menit flat-volume tinggi ({m["churning"]["at_top"]} di pucuk harga)')
 
     sec_hdr("4. KECONDONGAN ARKETIPE PASAR (MATCHING RANK)")
     for name, sc, crit in archetypes[:4]:
@@ -1378,7 +1448,7 @@ def print_single_report(m, setups, archetypes, ticker):
             badge = "🚨 BAHAYA / HINDARI" if score >= 50 else "✅ AMAN (TIDAK AKTIF)"
             icon = "🚨" if score >= 50 else "⚪"
         else:
-            badge = "🟢 READY TO ENTER" if score >= 80 else ("🟡 DEVELOPING" if score >= 50 else "⚪ INACTIVE")
+            badge = "🟢 READY TO ENTRY" if score >= 80 else ("🟡 DEVELOPING" if score >= 50 else "⚪ INACTIVE")
             icon = "🟢" if score >= 80 else ("🟡" if score >= 50 else "⚪")
         print(f'\n  {icon} SETUP {s["id"]}: {s["name"].upper()}')
         print(f'     Kategori: {s["type"]} | Skor: {bar(score, 12)} {score:5.1f}% ({n_met}/{n_tot}) [{badge}]')
@@ -1410,8 +1480,8 @@ def print_single_report(m, setups, archetypes, ticker):
 
     sec_hdr("CATATAN PENUTUP & RISIKO")
     print('  • Analisis murni dinamika harga & antrean order book tanpa kode broker.')
-    print('  • Status EXTENDED: Hindari mengejar harga jika telah bergerak > 2 tick di atas zona entry ideal.')
-    print('  • Disiplin cut loss jika level invalidasi tersentuh. Informasi ini bukan saran investasi.')
+    print('  • Sinyal EXTENDED: Jangan kejar harga jika sudah melompat > 2 tick dari zona entry ideal.')
+    print('  • Disiplin Cut Loss 100% jika level invalidation tersentuh. Bukan rekomendasi investasi.')
     print()
 
 
@@ -1513,7 +1583,8 @@ def build_json(m, setups, archetypes, ticker):
         'zero_ask_low': m['zal'], 'bm_divergence': m['bm_div'],
         'traps': {'orb_bull_trap': m['orb_bull_trap'], 'broken_walls': m['broken_walls'],
                   'broken_walls_lot': m['broken_walls_lot'], 'held_walls': m['held_walls'],
-                  'bid_collapsed_low': m['recent']['bid_collapsed_low']},
+                  'bid_collapsed_low': m['recent']['bid_collapsed_low'],
+                  'floor_lock': m['floor_lock']},
         'archetypes': [{'name': a[0], 'score': a[1]} for a in archetypes],
         'setups': [{'id': s['id'], 'name': s['name'], 'score': get_setup_score(s),
                     'met': s['checks_met'], 'pending': s['checks_pending'], 'params': s['params']} for s in setups],
