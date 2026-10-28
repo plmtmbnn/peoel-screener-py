@@ -33,14 +33,15 @@ This document provides foundational context, architectural boundaries, and opera
 >     4. Layer 4 (Broker Trajectory & Cumulative Slopes, 20%): 1D/5D/10D/20D cumulative delta trajectory, seller exhaustion, distributor buyback, and crowd capitulation.
 >     5. Layer 5 (Network Topology & Anti-Wash, 10%): Self-matching ratio, circular wash rotation, and Many-to-Few absorption vs Few-to-Many dispersion.
 >   - Dynamic Weight Normalization: When optional files are omitted, active layer base weights automatically rebalance to 100% (e.g. 2-file mode normalizes Layer 1 and Layer 2 to 50% each).
->   - 6 Swing Playbook Setups:
->     1. Multi-Day Silent Absorption & VCP Base
->     2. Ascending Value Area & Breakout Valid
->     3. Pullback to Demand & Anchored VWAP Re-test
->     4. Capitulation Double-Bottom & Seller Exhaustion
->     5. Institutional Cost-Basis Discount Accumulation
->     6. Multi-Day Distribution / Markdown Waterfall Trap
->   - Swing Action Taxonomy: `STRONG_BUY` (score >= 80), `BUY_ON_WEAKNESS` (score 60 - 79 or tape-painted breakout), `WAIT_FOR_TRIGGER` (score 40 - 59 with valid base/reversal setup), `AVOID` (ARB floor lock or illiquid), `AVOID_DISTRIBUTION` (active markdown waterfall or trapped legacy distribution).
+>   - 6 Swing Playbook Setups & Execution Invariants:
+>     1. Multi-Day Silent Absorption & VCP Base: Requires Big Money 5D net buy (> 0), confirmed VCP contraction, non-distribution execution regime in Stage 4 Markdown, and verifies price is holding within/near base demand (Close <= VAH * 1.04).
+>     2. Ascending Value Area & Breakout Valid: Buy on breakout or retest of VAH / daily VWAP with volume >= 20D average.
+>     3. Pullback to Demand & Anchored VWAP Re-test: Strictly requires primary trend structure (Close >= MA50 or Stage 2 Uptrend) AND proximity to AVWAP/VPOC (+-4%) before marking status READY.
+>     4. Capitulation Double-Bottom & Seller Exhaustion: Requires secondary low-volume retest, seller exhaustion/buyback confirmation, and daily reversal close >= daily VWAP with positive Big Money 1D.
+>     5. Institutional Cost-Basis Discount Accumulation: Automatically establishes adaptive entry range between intraday VWAP and Close with minimum 2-tick spread, bounded stop loss at handle/swing support, and realistic profit targets (TP1 at institutional cost, TP2 at markup).
+>     6. Multi-Day Distribution / Markdown Waterfall Trap: Triggers on ARB floor locks, active Big Money dumping (>Rp 1 Billion net sell 5D), trapped legacy liquidation (>=3 legacy institutions underwater), or Stage 4 Markdown drawdowns (>15% from 10D high). Overrides bullish setups into `AVOID_DISTRIBUTION` unless a bullish setup is strictly READY.
+>   - Measured Move Swing Target Caps: TP1 capped at +25% and TP2 capped at +45% (or nearest overhead supply wall) to eliminate unrealistic post-crash target distortions and distorted risk/reward ratios.
+>   - Swing Action Taxonomy: `STRONG_BUY` (score >= 70, setup READY, RR >= 2.0), `BUY_ON_WEAKNESS` (score 56 - 69, setup READY, RR >= 2.0), `WAIT_FOR_TRIGGER` (score >= 40, setup READY/WAIT_TRIGGER, RR >= 2.0), `WAIT` (setups developing / no edge), `AVOID` (ARB floor lock or illiquid), `AVOID_DISTRIBUTION` (active markdown waterfall or trapped legacy distribution).
 > - **Trap Detection & Broken Support Verification**: Integrate morning ORB bull trap (`orb_bull_trap`), passive bid wall fractures (`broken_walls`), low-level bid collapse (`bid_collapsed_low`), and floor offer locks (`floor_lock`) into safety actions and JSON schemas.
 > - **ZIP Pair Key Timestamp Tolerance**: Maintain minute/second download drift tolerance in `pair_key` to avoid unlinked running trade CSV and trade-book JSON pairs.
 > - **Client Contract Immutability**: Maintain backward compatibility for the output dictionary structure returned by `app.screener.analyze_stock` and `app.swing_screener.analyze_swing_stock` to avoid breaking frontend clients.
@@ -107,7 +108,7 @@ peoel-screener-py/
 │   └── swing_screener.py    # Multi-day 1 - 2 weeks swing trading engine (5-layer composite scoring)
 ├── tests/
 │   ├── test_api.py          # Pytest suite covering intraday API endpoints and scan workflows
-│   └── test_swing_screener.py # Pytest suite covering 7 BEI swing archetypes and 2-file fallback
+│   └── test_swing_screener.py # Pytest suite covering 14 BEI swing archetypes and 2-file fallback
 ├── temp_residuals/          # Transient directory for temporary ZIP extraction and cleanup
 ├── requirements.txt         # Pinned project dependencies
 ├── run.py                   # Local development launcher

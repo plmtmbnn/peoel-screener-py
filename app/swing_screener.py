@@ -1317,22 +1317,34 @@ def eval_swing_setups(
         m1.append(("Volume koreksi/jeda mengering (Volume Dry-Up)", f"rasio {vl['vol_dryup_ratio']}x rata-rata 20D"))
     else:
         p1.append(("Volume koreksi <= 0.70x rata-rata 20D", f"saat ini {vl['vol_dryup_ratio']}x"))
-    if w10["bm_net_val"] > 0 or w5["bm_net_val"] > 0:
+    if w5["bm_net_val"] > 0 and (w10["bm_net_val"] > 0 or w5["bm_net_val"] >= -w10["bm_net_val"] * 0.5):
         m1.append(("Akumulasi Big Money positif di fase base", f"BM 5D Rp {fmt(w5['bm_net_val'])}, 10D Rp {fmt(w10['bm_net_val'])}"))
     else:
-        p1.append(("Big Money 5D atau 10D harus Net Buy (> 0)", f"BM 5D Rp {fmt(w5['bm_net_val'])}"))
+        p1.append(("Big Money 5D harus Net Buy (> 0)", f"saat ini 5D Rp {fmt(w5['bm_net_val'])}, 10D Rp {fmt(w10['bm_net_val'])}"))
     if w5["plir"] >= 1.0:
         m1.append(("Ukuran lot per order beli mengungguli jual (PLIR >= 1.0)", f"PLIR 5D {w5['plir']}x"))
     else:
         p1.append(("PLIR 5D >= 1.0x", f"saat ini {w5['plir']}x"))
 
-    s1_lo = max(vp20["val"], vp["swing_low_22d"])
-    s1_hi = max(s1_lo, min(c, vp20["vpoc"]))
+    s1_lo = max(vp20["val"], vp["swing_low_22d"], step(c, -4))
+    s1_hi = max(c, min(step(c, 2), vp20["vpoc"]))
+    if s1_lo >= s1_hi:
+        s1_lo = step(c, -2)
+        s1_hi = max(c, step(c, 1))
     s1_sl = step(min(s1_lo, vp["swing_low_22d"]), -2)
-    s1_tp1 = max(vp20["vah"], int(round(ma20)))
-    s1_tp2 = max(vp["swing_high_22d"], vp60["vpoc"])
+    s1_tp1 = min(max(vp20["vah"], int(round(ma20)), int(round(s1_hi * 1.08))), int(round(s1_hi * 1.25)))
+    s1_tp2 = min(max(vp["swing_high_22d"], vp60["vpoc"], int(round(s1_hi * 1.15))), int(round(s1_hi * 1.45)))
     if supply_wall and s1_tp2 > supply_wall:
-        s1_tp2 = step(supply_wall, -2)
+        s1_tp2 = max(s1_tp1, step(supply_wall, -2))
+    s1_valid_base = (
+        vl["trend_regime"] != "STAGE_4_MARKDOWN"
+        or (
+            vl["is_vcp"]
+            and w5["bm_net_val"] > 0
+            and l2["execution_regime"] not in ("RETAIL_ABSORBING_INST_SUPPLY", "PAINT_THE_TAPE_BULL_TRAP", "STEALTH_TWAP_DISTRIBUTION")
+        )
+    )
+    is_at_base = bool(c <= max(vp20["vah"], vp10["vah"]) * 1.04)
     setups.append({
         "id": 1,
         "name": "Multi-Day Silent Absorption & VCP Base",
@@ -1341,7 +1353,7 @@ def eval_swing_setups(
         "checks_pending": p1,
         "params": _build_plan(
             s1_lo, s1_hi, s1_sl, s1_tp1, s1_tp2,
-            status="READY" if len(m1) >= 3 else "DEVELOPING",
+            status="READY" if (len(m1) >= 3 and s1_valid_base and is_at_base) else "DEVELOPING",
             strategy="Buy on Weakness di Base Demand / VAL",
             horizon="5 - 10 Hari Bursa (1 - 2 Minggu)",
             trigger=f"Antre di Rp {round_down_tick(s1_lo)}-{round_up_tick(s1_hi)} saat HAKI mengering & Close bertahan >= Rp {vwap_d}.",
@@ -1374,11 +1386,13 @@ def eval_swing_setups(
         s2_sl_base = int(round(bo_lo - max(vl["atr14"] * 1.5, tick_size(bo_lo) * 4)))
     s2_sl = step(round_down_tick(s2_sl_base), -1)
     base_depth = max(0, vp["high_10d"] - vp["low_10d"])
-    s2_tp1 = max(int(round(bo_px * 1.08)), min(int(round(bo_px + base_depth * 0.50)), int(round(bo_px * 1.11))))
-    s2_tp2 = max(
-        vp["swing_high_22d"],
-        int(round(bo_px * 1.16)),
-        min(max(vp["swing_high_60d"], bo_px + base_depth), int(round(bo_px * 1.21))),
+    s2_tp1 = max(int(round(bo_px * 1.08)), min(int(round(bo_px + base_depth * 0.50)), int(round(bo_px * 1.15))))
+    s2_tp2 = min(
+        max(
+            int(round(bo_px * 1.16)),
+            min(max(vp["swing_high_22d"], vp["swing_high_60d"], bo_px + base_depth), int(round(bo_px * 1.35))),
+        ),
+        int(round(bo_px * 1.45)),
     )
     setups.append({
         "id": 2,
@@ -1397,7 +1411,8 @@ def eval_swing_setups(
     })
 
     m3, p3 = [], []
-    if c >= ma50 or vl["trend_regime"] == "STAGE_2_UPTREND":
+    has_trend_structure = (c >= ma50 or vl["trend_regime"] == "STAGE_2_UPTREND")
+    if has_trend_structure:
         m3.append(("Struktur tren menengah masih terjaga di atas MA50", f"Close Rp {c} vs MA50 Rp {ma50:.0f}"))
     else:
         p3.append(("Harga harus berada di atas MA50", f"Close Rp {c} vs MA50 Rp {ma50:.0f}"))
@@ -1414,11 +1429,19 @@ def eval_swing_setups(
     else:
         p3.append(("Volume pullback <= 0.85x rata-rata 20D", f"saat ini {vl['vol_dryup_ratio']}x"))
 
+    is_at_pullback = bool(abs(pct(c - avwap_low, avwap_low)) <= 4.0 or abs(pct(c - vp20["vpoc"], vp20["vpoc"])) <= 4.0)
     s3_lo = min(c, avwap_low)
     s3_hi = max(c, avwap_low)
+    if s3_lo < step(c, -4):
+        s3_lo = step(c, -3)
+    if s3_lo >= s3_hi:
+        s3_lo = step(c, -2)
+        s3_hi = step(c, 1)
     s3_sl = step(min(vp20["val"], vp["swing_low_22d"]), -2)
-    s3_tp1 = max(vp20["vah"], vp["high_10d"])
-    s3_tp2 = max(vp["swing_high_22d"], int(round(s3_hi * 1.15)))
+    s3_tp1 = min(max(vp20["vah"], vp["high_10d"], int(round(s3_hi * 1.08))), int(round(s3_hi * 1.25)))
+    s3_tp2 = min(max(vp["swing_high_22d"], int(round(s3_hi * 1.15))), int(round(s3_hi * 1.45)))
+    if supply_wall and s3_tp2 > supply_wall:
+        s3_tp2 = max(s3_tp1, step(supply_wall, -2))
     setups.append({
         "id": 3,
         "name": "Pullback to Demand & Anchored VWAP Re-test",
@@ -1427,7 +1450,7 @@ def eval_swing_setups(
         "checks_pending": p3,
         "params": _build_plan(
             s3_lo, s3_hi, s3_sl, s3_tp1, s3_tp2,
-            status="READY" if len(m3) >= 3 else "DEVELOPING",
+            status="READY" if (len(m3) >= 3 and has_trend_structure and is_at_pullback) else "DEVELOPING",
             strategy="Buy on Pullback di Anchored VWAP",
             horizon="5 - 8 Hari Bursa",
             trigger=f"Masuk bertahap di Rp {round_down_tick(s3_lo)}-{round_up_tick(s3_hi)} saat muncul candle pantulan di atas Rp {avwap_low}.",
@@ -1457,13 +1480,14 @@ def eval_swing_setups(
     inst_cost = cb3.get("inst_accumulator_avg_cost") or c
     s4_lo = max(vp["swing_low_22d"], step(c, -3))
     s4_hi = c
+    if s4_lo >= s4_hi:
+        s4_lo = step(c, -2)
+        s4_hi = step(c, 1)
     s4_sl = max(step(vp["swing_low_22d"], -2), int(round(c * 0.93)))
-    s4_tp1 = min(max(vp10["vpoc"], int(round(c * 1.10))), int(round(c * 1.14)))
-    s4_tp2 = max(int(round(ma20)), int(round(inst_cost)), int(round(c * 1.18)))
+    s4_tp1 = min(max(vp10["vpoc"], int(round(c * 1.08))), int(round(c * 1.15)))
+    s4_tp2 = min(max(int(round(ma20)), int(round(inst_cost)), int(round(c * 1.16))), int(round(c * 1.30)))
     if supply_wall and s4_tp2 >= supply_wall:
-        s4_tp2 = max(int(round(c * 1.16)), min(step(round_down_tick(supply_wall), -2), int(round(c * 1.20))))
-    else:
-        s4_tp2 = min(s4_tp2, int(round(c * 1.22)))
+        s4_tp2 = max(s4_tp1, min(step(round_down_tick(supply_wall), -2), int(round(c * 1.25))))
     setups.append({
         "id": 4,
         "name": "Capitulation Double-Bottom & Seller Exhaustion",
@@ -1502,14 +1526,25 @@ def eval_swing_setups(
     else:
         p5.append(("Aliran Big Money 10D/22D harus positif", f"BM 10D Rp {fmt(w10['bm_net_val'])}"))
 
-    s5_lo = min(c, max(int(round(inst_cost)), vwap_d))
+    s5_lo = min(c, vwap_d)
     s5_hi = max(c, vwap_d)
-    s5_sl_base = max(vp["swing_low_22d"], vp["handle_low_3d"], int(round(inst_cost * 0.945)))
+    if s5_lo >= s5_hi:
+        s5_lo = step(c, -2)
+        s5_hi = step(c, 1)
+    else:
+        s5_lo = min(s5_lo, step(c, -2))
+
+    s5_sl_base = max(vp["swing_low_22d"], vp["handle_low_3d"], int(round(s5_lo * 0.94)))
     if s5_sl_base >= s5_lo:
         s5_sl_base = int(round(s5_lo - max(vl["atr14"] * 1.5, tick_size(s5_lo) * 4)))
     s5_sl = step(round_down_tick(s5_sl_base), -1)
-    s5_tp1 = max(int(round(inst_cost * 1.08)), vp20["vah"], int(round(c * 1.08)))
-    s5_tp2 = max(int(round(inst_cost * 1.18)), int(round(c * 1.16)), min(vp["swing_high_60d"], int(round(c * 1.21))))
+    s5_tp1 = max(int(round(s5_hi * 1.07)), min(int(round(inst_cost)), int(round(s5_hi * 1.12))))
+    s5_tp2 = min(max(int(round(inst_cost * 1.10)), int(round(s5_hi * 1.20))), int(round(s5_hi * 1.35)))
+    if supply_wall and supply_wall > s5_hi * 1.05:
+        if s5_tp1 >= supply_wall:
+            s5_tp1 = step(supply_wall, -2)
+        elif s5_tp2 > supply_wall:
+            s5_tp2 = max(s5_tp2, step(supply_wall, 2))
     setups.append({
         "id": 5,
         "name": "Institutional Cost-Basis Discount Accumulation",
@@ -1531,16 +1566,20 @@ def eval_swing_setups(
         m6.append(("Terdeteksi ARB Floor Lock / Suspensi BEI aktif dalam 10 hari terakhir", f"ARB 5D: {l1['flags']['recent_arb_days_5d']}, Suspensi 10D: {l1['flags']['zero_vol_days_10d']} hari"))
     else:
         p6.append(("Tidak ada ARB Lock atau Suspensi aktif", "aman"))
-    if l2["execution_regime"] in ("PAINT_THE_TAPE_BULL_TRAP", "STEALTH_TWAP_DISTRIBUTION", "RETAIL_ABSORBING_INST_SUPPLY"):
-        m6.append(("Distribusi Big Money aktif (Paint-the-Tape / TWAP Slicing / ditampung ritel)", f"Regime: {l2['execution_regime']}, BM 5D Rp {fmt(w5['bm_net_val'])}"))
+    if l2["execution_regime"] in ("PAINT_THE_TAPE_BULL_TRAP", "STEALTH_TWAP_DISTRIBUTION", "RETAIL_ABSORBING_INST_SUPPLY") or w5["bm_net_val"] < -1_000_000_000:
+        m6.append(("Distribusi Big Money aktif (Paint-the-Tape / TWAP Slicing / net dump > 1M)", f"Regime: {l2['execution_regime']}, BM 5D Rp {fmt(w5['bm_net_val'])}"))
     else:
         p6.append(("Tidak ada distribusi Big Money aktif", "aman"))
-    if cb3.get("top1_buyer_churn_trapped") or (l3.get("bandar_summary") or {}).get("broker_accdist") == "Dist":
-        m6.append(("Struktur broker Distribusi / Top Buyer didominasi High-Churn Crowd", f"Bandar: {(l3.get('bandar_summary') or {}).get('broker_accdist')}, Top3 Churn: {cb3.get('top3_all_churn_crowd')}"))
+    if (
+        cb3.get("top1_buyer_churn_trapped")
+        or (l3.get("bandar_summary") or {}).get("broker_accdist") == "Dist"
+        or (cb3.get("trapped_legacy_count", 0) >= 3 and w5["bm_net_val"] < -1_000_000_000)
+    ):
+        m6.append(("Struktur broker Distribusi / Top Buyer didominasi High-Churn Crowd / Likuidasi Legacy", f"Bandar: {(l3.get('bandar_summary') or {}).get('broker_accdist')}, Trapped Legacy: {cb3.get('trapped_legacy_count', 0)} broker"))
     else:
         p6.append(("Tidak ada distribusi bandar / jebakan ritel", "aman"))
     if (
-        (vl["trend_regime"] in ("STAGE_4_MARKDOWN", "DEEP_CORRECTION") and vp["va_migration"] == "DESCENDING")
+        (vl["trend_regime"] in ("STAGE_4_MARKDOWN", "DEEP_CORRECTION") and (vp["va_migration"] == "DESCENDING" or vp["drawdown_from_10d_high_pct"] >= 15.0))
         or l1["flags"]["blow_off_rejection_10d"]
     ):
         m6.append(("Struktur harga Markdown atau Blow-Off Rejection ekstrem (>12% upper-wick dump)", f"Regime: {vl['trend_regime']}, Drop dari High 10D: -{vp['drawdown_from_10d_high_pct']}%"))
@@ -1609,7 +1648,7 @@ def decide_swing_action(
             "trade_plan": trap_setup["params"],
         }
 
-    if trap_setup["score"] >= 75.0 and comp < 45.0 and best_bull["params"].get("status") not in ("READY", "WAIT_TRIGGER"):
+    if trap_setup["score"] >= 75.0 and best_bull["params"].get("status") != "READY":
         return {
             "key": "AVOID_DISTRIBUTION",
             "label": "HINDARI: DISTRIBUSI SIKLUS / MARKDOWN BELUM SELESAI",
@@ -1638,7 +1677,7 @@ def decide_swing_action(
             "trade_plan": best_bull["params"],
         }
 
-    if comp >= 40.0 and best_bull["score"] >= 70.0 and best_rr >= cfg["min_rr_net"]:
+    if comp >= 40.0 and best_bull["score"] >= 70.0 and best_rr >= cfg["min_rr_net"] and best_bull["params"].get("status") in ("READY", "WAIT_TRIGGER"):
         return {
             "key": "WAIT_FOR_TRIGGER",
             "label": "WATCHLIST KETAT: TUNGGU KONFIRMASI REVERSAL / SPECULATIVE SUPPORT",

@@ -1114,3 +1114,156 @@ def test_swing_screener_2file_proportional_fallback_and_endpoint():
     ]
     assert len(swing_routes) == 1
     assert swing_routes[0].endpoint is analyze_swing_ticker
+
+
+def test_swing_screener_bbca_institutional_cost_discount():
+    bbca_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips\zip_4")
+    if not bbca_dir.exists():
+        return
+    hist_f = next(bbca_dir.glob("*historical-trade*"))
+    tb_f = next(bbca_dir.glob("*trade-book*"))
+    md_f = next(bbca_dir.glob("*market-detector*"), None)
+    rt_f = next(bbca_dir.glob("*running-trade*"), None)
+    bd_f = next(bbca_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="BBCA",
+    )
+    assert res["ticker"] == "BBCA"
+    assert res["action"]["key"] == "WAIT_FOR_TRIGGER"
+    assert res["action"]["best_setup"] == "Institutional Cost-Basis Discount Accumulation"
+    tp = res["trade_plan"]
+    assert tp["status"] == "READY"
+    assert tp["entry_low"] < tp["entry_high"]
+    assert tp["rr_net"] >= 2.0
+
+
+def test_swing_screener_foru_markdown_waterfall_trap():
+    foru_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips\zip_2")
+    if not foru_dir.exists():
+        return
+    hist_f = next(foru_dir.glob("*historical-trade*"))
+    tb_f = next(foru_dir.glob("*trade-book*"))
+    md_f = next(foru_dir.glob("*market-detector*"), None)
+    rt_f = next(foru_dir.glob("*running-trade*"), None)
+    bd_f = next(foru_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="FORU",
+    )
+    assert res["ticker"] == "FORU"
+    assert res["action"]["key"] == "AVOID_DISTRIBUTION"
+    assert res["action"]["best_setup"] == "Multi-Day Distribution / Markdown Waterfall Trap"
+    assert res["trade_plan"]["rr_net"] == 0.0
+
+
+def test_swing_screener_emtk_institutional_discount_buy_on_weakness():
+    emtk_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips_batch2\zip_3")
+    if not emtk_dir.exists():
+        return
+    hist_f = next(emtk_dir.glob("*historical-trade*"))
+    tb_f = next(emtk_dir.glob("*trade-book*"))
+    md_f = next(emtk_dir.glob("*market-detector*"), None)
+    rt_f = next(emtk_dir.glob("*running-trade*"), None)
+    bd_f = next(emtk_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="EMTK",
+    )
+    assert res["ticker"] == "EMTK"
+    assert res["action"]["key"] == "BUY_ON_WEAKNESS"
+    assert res["action"]["best_setup"] == "Institutional Cost-Basis Discount Accumulation"
+    tp = res["trade_plan"]
+    assert tp["status"] == "READY"
+    assert tp["rr_net"] >= 2.0
+
+
+def test_swing_screener_ptro_avoid_distribution_trap():
+    ptro_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips_batch2\zip_1")
+    if not ptro_dir.exists():
+        return
+    hist_f = next(ptro_dir.glob("*historical-trade*"))
+    tb_f = next(ptro_dir.glob("*trade-book*"))
+    md_f = next(ptro_dir.glob("*market-detector*"), None)
+    rt_f = next(ptro_dir.glob("*running-trade*"), None)
+    bd_f = next(ptro_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="PTRO",
+    )
+    assert res["ticker"] == "PTRO"
+    assert res["action"]["key"] == "AVOID_DISTRIBUTION"
+    assert res["action"]["best_setup"] == "Multi-Day Distribution / Markdown Waterfall Trap"
+    assert res["trade_plan"]["rr_net"] == 0.0
+
+
+def test_swing_screener_asii_ascending_breakout_buy_on_weakness():
+    asii_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips_batch3\zip_2")
+    if not asii_dir.exists():
+        return
+    hist_f = next(asii_dir.glob("*historical-trade*"))
+    tb_f = next(asii_dir.glob("*trade-book*"))
+    md_f = next(asii_dir.glob("*market-detector*"), None)
+    rt_f = next(asii_dir.glob("*running-trade*"), None)
+    bd_f = next(asii_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="ASII",
+    )
+    assert res["ticker"] == "ASII"
+    assert res["action"]["key"] == "BUY_ON_WEAKNESS"
+    assert res["action"]["best_setup"] == "Ascending Value Area & Breakout Valid"
+    tp = res["trade_plan"]
+    assert tp["status"] == "READY"
+    assert tp["rr_net"] >= 2.0
+
+
+def test_swing_screener_toba_avoid_markdown_trap():
+    toba_dir = Path(r"C:\Users\polma\.gemini\antigravity\brain\9ca8275e-1507-49cc-a2f7-97b664c84502\scratch\zips_batch3\zip_4")
+    if not toba_dir.exists():
+        return
+    hist_f = next(toba_dir.glob("*historical-trade*"))
+    tb_f = next(toba_dir.glob("*trade-book*"))
+    md_f = next(toba_dir.glob("*market-detector*"), None)
+    rt_f = next(toba_dir.glob("*running-trade*"), None)
+    bd_f = next(toba_dir.glob("*broker-distribution*"), None)
+
+    res = analyze_swing_stock(
+        historical_source=str(hist_f),
+        trade_book_source=str(tb_f),
+        market_detector_source=str(md_f) if md_f else None,
+        running_trade_chart_source=str(rt_f) if rt_f else None,
+        broker_distribution_source=str(bd_f) if bd_f else None,
+        ticker="TOBA",
+    )
+    assert res["ticker"] == "TOBA"
+    assert res["action"]["key"] == "AVOID_DISTRIBUTION"
+    assert res["action"]["best_setup"] == "Multi-Day Distribution / Markdown Waterfall Trap"
+    assert res["trade_plan"]["rr_net"] == 0.0
+    assert res["action"]["best_setup"] == "Multi-Day Distribution / Markdown Waterfall Trap"
+    assert res["trade_plan"]["rr_net"] == 0.0

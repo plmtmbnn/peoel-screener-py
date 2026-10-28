@@ -27,7 +27,14 @@ All AI coding assistants (Antigravity, Claude Code, Cursor, Codex, Gemini) must 
    - Module `app.swing_screener` and endpoint `POST /api/v1/analyze-swing`.
    - 5-Layer Composite Scoring Architecture (0 - 100): Price Action & Multi-Day VP (25%), Order Flow & PLIR (25%), Participant Profile & Bandar Cost Basis (20%), Broker Trajectory & Cumulative Slopes (20%), Network Topology & Anti-Wash (10%).
    - Dynamic weight normalization: automatically rebalances active base weights to 100% when optional files are omitted (e.g. 2-file mode normalizes Layer 1 and Layer 2 to 50% each).
-   - 6 Playbook Setups: Multi-Day Silent Absorption & VCP Base, Ascending Value Area & Breakout Valid, Pullback to Demand & Anchored VWAP Re-test, Capitulation Double-Bottom & Seller Exhaustion, Institutional Cost-Basis Discount Accumulation, and Markdown Waterfall Trap.
+   - 6 Playbook Setups & Execution Invariants:
+     1. Multi-Day Silent Absorption & VCP Base (requires 5D net buy > 0, confirmed VCP contraction, non-distribution execution regime, and base ceiling <= VAH * 1.04).
+     2. Ascending Value Area & Breakout Valid (momentum breakout above VAH with volume confirmation).
+     3. Pullback to Demand & Anchored VWAP Re-test (strictly requires MA50 / Stage 2 Uptrend AND proximity to AVWAP/VPOC <= 4% before marking status READY).
+     4. Capitulation Double-Bottom & Seller Exhaustion (volume dry-up retest with seller exhaustion and daily reversal close >= VWAP).
+     5. Institutional Cost-Basis Discount Accumulation (adaptive non-collapsing entry range between intraday VWAP and Close with minimum 2-tick buffer).
+     6. Multi-Day Distribution / Markdown Waterfall Trap (triggers on ARB locks, >Rp 1B 5D net dumps, trapped legacy liquidation, or drawdowns >15%; prioritizes capital protection AVOID_DISTRIBUTION).
+   - Measured Move Swing Target Caps: TP1 capped at +25% and TP2 capped at +45% (or nearest overhead supply wall) to eliminate unrealistic post-crash target distortions and distorted risk/reward ratios.
    - Precision Microstructure Filters: Differentiates Active In-Range Institutional Accumulators from Trapped Legacy Positions (>25% underwater), flags Paint-the-Tape Bull Traps, identifies Passive Iceberg Absorption, and detects Circular Wash Rotation.
 5. **Upstream Live IDX Data & Cloudflare Proxy Routing**:
    - `GET /api/v1/stock-summary` (alias `GET /api/v1/idx/stock-summary`) queries `https://www.idx.co.id/primary/TradingSummary/GetStockSummary`.
